@@ -25,10 +25,17 @@ NEXTGEN="$ROOT/treetracker-database-nextgen"
 ADMIN_CLIENT="$ROOT/treetracker-admin-client"
 ADMIN_CLIENT_PORT="${ADMIN_CLIENT_PORT:-3001}"   # host port-forward → admin-client pod (ADMIN_URL for the e2e)
 
-export PATH="/opt/homebrew/bin:$PATH"
+# Gateway exposure. NodePort (default) works everywhere including servicelb-less/restricted
+# kernels; LoadBalancer keeps k3d's klipper LB for normal kernels / cloud. See step_cluster + F3.
+GATEWAY_SERVICE_TYPE="${GATEWAY_SERVICE_TYPE:-NodePort}"
+GATEWAY_NODEPORT_HTTP="${GATEWAY_NODEPORT_HTTP:-30080}"
+GATEWAY_NODEPORT_HTTPS="${GATEWAY_NODEPORT_HTTPS:-30443}"
+
+# Homebrew paths are macOS-only; guard them so Linux does not shell out to a missing `brew`.
+[ "$(uname)" = Darwin ] && export PATH="/opt/homebrew/bin:$PATH"
 export NO_PROXY="0.0.0.0,127.0.0.1,localhost,::1,.svc,.cluster.local"
 export no_proxy="$NO_PROXY"
-command -v psql >/dev/null 2>&1 || PATH="$(brew --prefix libpq 2>/dev/null)/bin:$PATH"
+command -v psql >/dev/null 2>&1 || { [ "$(uname)" = Darwin ] && PATH="$(brew --prefix libpq 2>/dev/null)/bin:$PATH"; }
 if ! command -v node >/dev/null 2>&1; then
   for d in "$HOME"/.nvm/versions/node/*/bin; do [ -x "$d/node" ] && PATH="$d:$PATH" && break; done
 fi
@@ -39,6 +46,28 @@ log()  { echo "${c_grn}▶${c_off} $*"; }
 info() { echo "${c_dim}  $*${c_off}"; }
 die()  { echo "${c_red}✖ $*${c_off}" >&2; exit 1; }
 
+# Every domain up.sh downloads from, named in the block hint below.
+NET_HINT_DOMAINS="registry-1.docker.io auth.docker.io app.getambassador.io datawire-static-files.s3.amazonaws.com registry.npmjs.org registry.yarnpkg.com"
+# Firewall-block diagnosis. The sandbox proxy answers a policy-blocked host with HTTP 403 and a
+# body that starts "Blocked by network policy: …"; docker/kubectl/helm/npm all swallow that body,
+# so a hard block looks like a transient/proxy failure. When a download fails we re-probe the host
+# directly with curl: if it IS blocked, print the real 403 explanation + the fix and exit; if not
+# (a genuinely transient error), return 0 so the caller can keep retrying / fall through to its
+# own message. A block is deterministic, so there is nothing to gain by retrying it.
+net_check_die() {   # $1 = what failed (for the message); $2 = host to probe
+  local what="$1" host="$2" body
+  body=$(curl -sS -m 8 "https://${host}/" 2>&1 || true)
+  case "$body" in *"Blocked by network policy"*)
+    echo "${c_red}✖ ${what}: blocked by the sandbox network policy${c_off}" >&2
+    printf '%s\n' "$body" | sed 's/^/    /' >&2
+    echo "  Allow it on your HOST, then re-run ./k3s/up.sh:" >&2
+    echo "    sbx policy allow network ${host}" >&2
+    echo "  (the full run also needs: ${NET_HINT_DOMAINS})" >&2
+    exit 1 ;;
+  esac
+  return 0
+}
+
 k()      { kubectl --context "$CONTEXT" "$@"; }
 pg_pod() { k -n data get pod -l app=postgres -o jsonpath='{.items[0].metadata.name}' 2>/dev/null; }
 
@@ -47,7 +76,10 @@ ensure_image() {   # pull on host (retry transient EOF) if absent, then load int
   if ! docker image inspect "$img" >/dev/null 2>&1; then
     for i in $(seq 1 10); do
       docker pull "$img" >/dev/null 2>&1 && break
-      [ "$i" = 10 ] && die "docker pull $img failed — run ./k3s/prepare.sh (proxy)"
+      # A firewall block is deterministic and won't clear on retry — detect it on the first failed
+      # attempt and fail fast with the real cause instead of spending the whole retry budget.
+      [ "$i" = 1 ]  && net_check_die "docker pull $img" registry-1.docker.io
+      [ "$i" = 10 ] && die "docker pull $img failed after 10 attempts (transient registry error — rerun, or check: docker pull $img)"
       info "pull $img: retry $i"; sleep 5
     done
   fi
@@ -57,9 +89,27 @@ load_image() {
   local img="$1"
   if [ -n "$IMAGE_REGISTRY" ]; then
     docker tag "$img" "$IMAGE_REGISTRY/$img"; docker push "$IMAGE_REGISTRY/$img" >/dev/null
+    # The cluster pulls from the registry, so the local build copies are dead weight. Drop both
+    # the original tag and the registry tag to keep the builder host's disk from filling over a run.
+    docker image rm -f "$img" "$IMAGE_REGISTRY/$img" >/dev/null 2>&1 || true
   else
     k3d image import "$img" -c "$CLUSTER" >/dev/null 2>&1 || die "k3d image import $img failed"
+    # k3d import COPIES the image into the node's containerd, so the host Docker copy is now
+    # redundant — and on this stack host Docker and the k3d node share one /var/lib/docker device,
+    # so keeping both stores every image twice. Left unchecked the app image builds push a small
+    # Docker disk into kubelet DiskPressure, which then GCs the local-only ":local" images (not in
+    # any registry, so unrecoverable) and wedges the cluster. Drop the host copy right after import.
+    # Non-fatal and cheap to reconstruct: built images are rebuilt by their step, and pulled base
+    # images are re-fetched by ensure_image on the next run.
+    docker image rm -f "$img" >/dev/null 2>&1 || true
   fi
+  # Reclaim BuildKit cache too. It grows ~2GB across the service builds and lives on the same
+  # /var/lib/docker device, so even with the per-image cleanup above a small (≈10GB) Docker disk
+  # peaks near kubelet DiskPressure during the last (admin-client) build — verified: a fresh
+  # `up.sh all` otherwise tops out ~88% used. Pruning after each import caps the on-disk cache at
+  # roughly the in-flight build. Trade: a re-run rebuilds cold (the cache is regenerated), which is
+  # the right call for never wedging the cluster over a few minutes of rebuild time.
+  docker builder prune -f >/dev/null 2>&1 || true
 }
 wait_pg_ready() {
   local pod i; pod="$(pg_pod)"; [ -n "$pod" ] || die "no postgres pod"
@@ -79,9 +129,28 @@ start_pf() {
 }
 stop_pf() { [ -n "$PF_PID" ] && kill "$PF_PID" 2>/dev/null || true; PF_PID=""; }
 
-npm_migrate() {   # $1 = db-migrate project dir with npm "migrate:up"
-  ( cd "$1" && { [ -d node_modules ] || npm install --no-audit --no-fund >/dev/null 2>&1; } \
-    && npm run migrate:up >/dev/null ) || die "migrate failed in $1"
+# The virtiofs workspace forbids symlinks, so `npm install` needs --no-bin-links (verified).
+# That leaves no node_modules/.bin shim, so db-migrate is invoked through its node entrypoint
+# (db_migrate) rather than the bare `db-migrate` binary or `npm run migrate:up`. Harmless on a
+# normal filesystem too. If npm still fails here, prepare-linux.sh SETUP_NM_CACHE=1 provides an
+# ext4 node_modules fallback.
+npm_install_local() {   # $1 = project dir
+  ( cd "$1" && { [ -d node_modules ] || npm install --no-audit --no-fund --no-bin-links >/dev/null 2>&1; } ) \
+    || { net_check_die "npm install in $1" registry.npmjs.org; die "npm install failed in $1 (symlink-hostile FS? run ./k3s/prepare-linux.sh with SETUP_NM_CACHE=1)"; }
+}
+db_migrate() {   # $1 = dir whose node_modules has db-migrate; $2.. = db-migrate args (CWD = config dir)
+  node "$1/node_modules/db-migrate/bin/db-migrate" "${@:2}"
+}
+
+# F5: write the gitignored db-migrate config if absent (never clobber a developer's own file).
+# Both point at the port-forward opened by start_pf; the optional schema key scopes field-data.
+ensure_db_json() {   # $1 = path, $2 = optional schema
+  [ -f "$1" ] && return 0
+  local schema=""; [ -n "${2:-}" ] && schema=",\"schema\":\"$2\""
+  cat > "$1" <<EOF
+{"local":{"driver":"pg","host":"127.0.0.1","port":5432,"database":"treetracker","user":"postgres","password":"postgres"$schema}}
+EOF
+  info "generated $1"
 }
 
 # ── Steps ─────────────────────────────────────────────────────────────────
@@ -103,8 +172,27 @@ step_cluster() {
   if k3d cluster list 2>/dev/null | grep -q "^$CLUSTER "; then
     k3d cluster start "$CLUSTER" >/dev/null 2>&1 || true
   else
-    k3d cluster create "$CLUSTER" --k3s-arg "--disable=traefik@server:*" \
-      -p "8088:80@loadbalancer" -p "8443:443@loadbalancer" --agents 0
+    # These three flags are harmless on a normal kernel and required on restricted ones
+    # (sandbox/CI): /dev/kmsg shim so kubelet boots, host-gw flannel (no vxlan module to
+    # encapsulate), and a no-op conntrack tunable (the sysctl is read-only in-container).
+    # servicelb + the host port mapping depend on how the gateway is exposed (F3):
+    #   NodePort   -> disable klipper, publish the emissary NodePort (30080/30443)
+    #   LoadBalancer -> keep klipper, map the node's :80/:443
+    local lb_args
+    if [ "$GATEWAY_SERVICE_TYPE" = NodePort ]; then
+      lb_args=( --k3s-arg "--disable=servicelb@server:*"
+                -p "8088:${GATEWAY_NODEPORT_HTTP}@loadbalancer"
+                -p "8443:${GATEWAY_NODEPORT_HTTPS}@loadbalancer" )
+    else
+      lb_args=( -p "8088:80@loadbalancer" -p "8443:443@loadbalancer" )
+    fi
+    k3d cluster create "$CLUSTER" \
+      --k3s-arg "--disable=traefik@server:*" \
+      --k3s-arg "--flannel-backend=host-gw@server:*" \
+      --k3s-arg "--kube-proxy-arg=conntrack-max-per-core=0@server:*" \
+      "${lb_args[@]}" \
+      --agents 0 \
+      -v /dev/null:/dev/kmsg@server:0
   fi
   kubectl config use-context "$CONTEXT" >/dev/null
   [ "$(kubectl config current-context)" = "$CONTEXT" ] || die "context is not $CONTEXT"
@@ -131,6 +219,32 @@ step_cluster() {
   k get nodes 2>/dev/null | grep -q ' Ready' || die "cluster API/node never became ready"
 }
 
+# Alpine/musl pods inherit a `search <host>.docker.internal` suffix. When the host DNS answers
+# NOERROR-with-no-records (not NXDOMAIN), musl's getaddrinfo stops the search walk instead of
+# trying the next suffix, so every in-cluster name fails to resolve. Give CoreDNS an explicit
+# NXDOMAIN zone for *.docker.internal so the walk continues. Harmless on glibc/normal setups;
+# k3d's own host.k3d.internal lives in a different zone and is untouched. Idempotent.
+step_coredns() {
+  [ "$ENV" = local ] || { info "coredns: skipped (ENV=$ENV, not k3d)"; return 0; }
+  log "coredns-custom (NXDOMAIN for *.docker.internal — musl getaddrinfo search-walk fix)"
+  k apply -f - >/dev/null <<'YAML' || die "coredns-custom apply failed"
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coredns-custom
+  namespace: kube-system
+data:
+  docker-internal.server: |
+    docker.internal:53 {
+      template IN ANY {
+        rcode NXDOMAIN
+      }
+    }
+YAML
+  k -n kube-system rollout restart deploy/coredns >/dev/null
+  k -n kube-system rollout status deploy/coredns --timeout=120s
+}
+
 step_infra_images() { log "infra images"; ensure_image "postgis/postgis:15-3.4"; ensure_image "rabbitmq:3.13-management"; }
 
 step_postgres() {
@@ -146,10 +260,17 @@ step_postgres() {
 step_migrate() {
   log "db-migrate (treetracker, data_pipeline, field_data, treetracker-api)"
   start_pf
-  local DBM="$NEXTGEN/treetracker/node_modules/.bin/db-migrate"
-  npm_migrate "$NEXTGEN/treetracker"       # public schema (+ field_data/data_pipeline/keycloak schemas)
-  npm_migrate "$NEXTGEN/data_pipeline"     # bulk_tree_upload
-  ( cd "$ROOT/treetracker-field-data/database" && "$DBM" up -e local >/dev/null ) \
+  npm_install_local "$NEXTGEN/treetracker"
+  npm_install_local "$NEXTGEN/data_pipeline"
+  # F5: field-data uses schema=field_data; treetracker-api uses no schema (it relies on the
+  # treetracker,public search_path set below), matching each repo's expected local DB config.
+  ensure_db_json "$ROOT/treetracker-field-data/database/database.json" field_data
+  ensure_db_json "$ROOT/treetracker-api/database.json"
+  # nextgen migrations: each nextgen dir has its own db-migrate. field-data + treetracker-api
+  # reuse the treetracker one (the tool + pg driver), matching how the stack ran before.
+  ( cd "$NEXTGEN/treetracker"   && db_migrate "$NEXTGEN/treetracker"   up -e local -t nextgen_migrations >/dev/null ) || die "treetracker nextgen migrate failed"
+  ( cd "$NEXTGEN/data_pipeline" && db_migrate "$NEXTGEN/data_pipeline" up -e local -t nextgen_migrations >/dev/null ) || die "data_pipeline nextgen migrate failed"
+  ( cd "$ROOT/treetracker-field-data/database" && db_migrate "$NEXTGEN/treetracker" up -e local >/dev/null ) \
     || die "field_data migrate failed"
   # treetracker-api owns grower_account/capture/tree/... in a `treetracker` schema.
   # DB default search_path=treetracker,public so uuid_generate_v4/PostGIS stay reachable.
@@ -157,7 +278,7 @@ step_migrate() {
 CREATE SCHEMA IF NOT EXISTS treetracker;
 ALTER DATABASE treetracker SET search_path TO treetracker, public;
 SQL
-  ( cd "$ROOT/treetracker-api" && "$DBM" up -e local --migrations-dir database/migrations/ >/dev/null ) \
+  ( cd "$ROOT/treetracker-api" && db_migrate "$NEXTGEN/treetracker" up -e local --migrations-dir database/migrations/ >/dev/null ) \
     || die "treetracker-api migrate failed"
   stop_pf
   info "public.trees + field_data.* + data_pipeline.bulk_tree_upload + treetracker.grower_account/capture/tree ready"
@@ -172,14 +293,37 @@ EMISSARY_CHART_VER="${EMISSARY_CHART_VER:-8.12.2}"
 step_gateway() {
   log "emissary-ingress (API gateway → localhost:8088)"
   k apply -f "https://app.getambassador.io/yaml/emissary/${EMISSARY_VER}/emissary-crds.yaml" >/dev/null 2>&1 \
-    || die "emissary CRD apply failed"
+    || { net_check_die "emissary CRD download" app.getambassador.io; die "emissary CRD apply failed"; }
   k wait --timeout=150s --for=condition=available deployment emissary-apiext -n emissary-system >/dev/null 2>&1 \
     || die "emissary-apiext never ready"
   helm --kube-context "$CONTEXT" repo add datawire https://app.getambassador.io >/dev/null 2>&1 || true
   helm --kube-context "$CONTEXT" repo update datawire >/dev/null 2>&1 || true
+  # No `--wait` here. The chart's Service defaults to type LoadBalancer; in NodePort mode
+  # servicelb is disabled, so that Service never receives an ingress IP and `helm --wait` blocks
+  # on it until the timeout, failing (context deadline exceeded) BEFORE the patch below can
+  # convert it. Install without waiting, patch the Service, then gate on the Deployment rollout
+  # explicitly — which is the readiness that actually matters and works in both Service modes.
   helm --kube-context "$CONTEXT" upgrade --install emissary-ingress datawire/emissary-ingress \
-    --version "$EMISSARY_CHART_VER" -n emissary --create-namespace --wait --timeout 5m >/tmp/up-emissary.log 2>&1 \
-    || die "emissary helm install failed (see /tmp/up-emissary.log)"
+    --version "$EMISSARY_CHART_VER" -n emissary --create-namespace >/tmp/up-emissary.log 2>&1 \
+    || { net_check_die "emissary chart download" datawire-static-files.s3.amazonaws.com
+         net_check_die "emissary chart index" app.getambassador.io
+         die "emissary helm install failed (see /tmp/up-emissary.log)"; }
+  # The chart defaults the Service to LoadBalancer; with servicelb disabled (NodePort mode)
+  # that would stay <pending> forever. Pin the two NodePorts the k3d LB maps 8088/8443 onto.
+  # A strategic-merge patch (merge key = port) sets type + nodePort while preserving the
+  # chart's name/targetPort, so we do not need to know emissary's container ports. Patch
+  # rather than helm --set (the chart's service.ports list is index-fragile under --set).
+  # LoadBalancer mode keeps the chart default (no patch). Patch BEFORE waiting on rollout so a
+  # LoadBalancer Service is never in the wait path.
+  if [ "$GATEWAY_SERVICE_TYPE" = NodePort ]; then
+    k -n emissary patch svc emissary-ingress -p "$(cat <<EOF
+{"spec":{"type":"NodePort","ports":[
+  {"port":80,"nodePort":${GATEWAY_NODEPORT_HTTP}},
+  {"port":443,"nodePort":${GATEWAY_NODEPORT_HTTPS}}]}}
+EOF
+)" >/dev/null || die "emissary NodePort patch failed"
+  fi
+  k -n emissary rollout status deploy/emissary-ingress --timeout=300s || die "emissary-ingress deployment never ready"
   k apply -f "$K3S_DIR/emissary.yaml" >/dev/null   # Listener + wildcard Host
 }
 
@@ -188,7 +332,7 @@ step_field_data() {
   docker build -t treetracker-field-data:local "$ROOT/treetracker-field-data" >/tmp/up-fielddata-build.log 2>&1 \
     || die "field-data image build failed (see /tmp/up-fielddata-build.log)"
   load_image "treetracker-field-data:local"
-  k apply -k "$ROOT/treetracker-field-data/deployment/overlays/local" >/dev/null
+  k apply -k "$K3S_DIR/services/treetracker-field-data" >/dev/null
   k -n field-data-api rollout status deploy/treetracker-field-data --timeout=180s
 }
 
@@ -197,7 +341,7 @@ step_treetracker_api() {
   docker build -t treetracker-api:local "$ROOT/treetracker-api" >/tmp/up-tta-build.log 2>&1 \
     || die "treetracker-api image build failed (see /tmp/up-tta-build.log)"
   load_image "treetracker-api:local"
-  k apply -k "$ROOT/treetracker-api/deployment/overlays/local" >/dev/null
+  k apply -k "$K3S_DIR/services/treetracker-api" >/dev/null
   k -n treetracker-api rollout status deploy/treetracker-api --timeout=180s
 }
 
@@ -206,7 +350,7 @@ step_images_api() {
   docker build -t images-api:local "$ROOT/images-api" >/tmp/up-imgapi-build.log 2>&1 \
     || die "images-api image build failed (see /tmp/up-imgapi-build.log)"
   load_image "images-api:local"
-  k apply -k "$ROOT/images-api/deployment/overlays/local" >/dev/null
+  k apply -k "$K3S_DIR/services/images-api" >/dev/null
   k -n images-api rollout status deploy/images-api --timeout=180s
 }
 
@@ -215,7 +359,7 @@ step_transformer_v2() {
   docker build -t bulk-pack-transformer-v2:local "$ROOT/bulk-pack-transformer-v2" >/tmp/up-btv2-build.log 2>&1 \
     || die "transformer-v2 image build failed (see /tmp/up-btv2-build.log)"
   load_image "bulk-pack-transformer-v2:local"
-  k apply -k "$ROOT/bulk-pack-transformer-v2/deployment/overlays/local" >/dev/null
+  k apply -k "$K3S_DIR/services/bulk-pack-transformer-v2" >/dev/null
   k -n bulk-pack-services rollout status deploy/bulk-pack-transformer-v2 --timeout=180s
 }
 step_processor() {
@@ -223,20 +367,31 @@ step_processor() {
   docker build -t bulk-pack-processor:local "$ROOT/bulk-pack-processor" >/tmp/up-bpp-build.log 2>&1 \
     || die "processor image build failed (see /tmp/up-bpp-build.log)"
   load_image "bulk-pack-processor:local"
-  k apply -k "$ROOT/bulk-pack-processor/deployment/overlays/local" >/dev/null
-  info "cronjob scheduled (*/5); trigger now: kubectl -n bulk-pack-services create job bpp-now --from=cronjob/bulk-pack-processor"
+  k apply -k "$K3S_DIR/services/bulk-pack-processor" >/dev/null
+  info "cronjob scheduled (every minute); trigger now: kubectl -n bulk-pack-services create job bpp-now --from=cronjob/bulk-pack-processor"
 }
 step_consumer() {
   log "bulk-pack-consumer (SQS → data_pipeline.bulk_tree_upload)"
+  # The consumer is the only component that needs AWS. Without creds, skip it (loud, not fatal):
+  # everything downstream is exercised by injecting at the bulk_tree_upload boundary (smoke.sh).
+  # REQUIRE_CONSUMER=1 restores the hard failure for CI that must exercise the real S3→SQS path.
+  local akid="" asec=""
+  if command -v aws >/dev/null 2>&1; then
+    akid=$(aws configure get aws_access_key_id --profile "${AWS_PROFILE:-greenstand}" 2>/dev/null || true)
+    asec=$(aws configure get aws_secret_access_key --profile "${AWS_PROFILE:-greenstand}" 2>/dev/null || true)
+  fi
+  if [ -z "$akid" ] || [ -z "$asec" ]; then
+    [ "${REQUIRE_CONSUMER:-0}" = 1 ] && die "no AWS creds for profile '${AWS_PROFILE:-greenstand}' and REQUIRE_CONSUMER=1"
+    info "SKIPPED: no AWS creds for profile '${AWS_PROFILE:-greenstand}'."
+    info "  S3→SQS ingest is unavailable; inject at the bulk_tree_upload boundary instead (./k3s/smoke.sh)."
+    info "  Enable it with: aws configure --profile ${AWS_PROFILE:-greenstand}"
+    return 0
+  fi
   docker build -t bulk-pack-consumer:local "$ROOT/bulk-pack-consumer" >/tmp/up-bpc-build.log 2>&1 \
     || die "consumer image build failed (see /tmp/up-bpc-build.log)"
   load_image "bulk-pack-consumer:local"
   # Secrets created imperatively (real AWS creds never land in git): DB + SQS URL literals,
   # AWS creds from the local `greenstand` CLI profile.
-  local akid asec
-  akid=$(aws configure get aws_access_key_id --profile "${AWS_PROFILE:-greenstand}" 2>/dev/null)
-  asec=$(aws configure get aws_secret_access_key --profile "${AWS_PROFILE:-greenstand}" 2>/dev/null)
-  [ -n "$akid" ] && [ -n "$asec" ] || die "no AWS creds for profile '${AWS_PROFILE:-greenstand}' (aws configure --profile greenstand)"
   k -n bulk-pack-services create secret generic bulk-pack-database-connection \
     --from-literal=db='postgresql://postgres:postgres@postgres.data.svc.cluster.local:5432/data_pipeline' \
     --dry-run=client -o yaml | k apply -f - >/dev/null
@@ -256,17 +411,22 @@ step_admin() {
   docker build -t treetracker-admin-api:local "$ROOT/treetracker-admin-api" >/tmp/up-adminapi-build.log 2>&1 \
     || die "admin-api image build failed (see /tmp/up-adminapi-build.log)"
   load_image "treetracker-admin-api:local"
-  k apply -k "$ROOT/treetracker-admin-api/deployment/overlays/local" >/dev/null
+  k apply -k "$K3S_DIR/services/treetracker-admin-api" >/dev/null
   k -n admin-api rollout status deploy/treetracker-admin-api --timeout=180s
   seed_admin_user
 }
 
 step_admin_client() {
   log "treetracker-admin-client (static SPA → served behind Ambassador)"
-  docker build -t treetracker-admin-client:local -f "$ADMIN_CLIENT/deployment/local/Dockerfile" "$ADMIN_CLIENT" \
+  # Vendored build config lives in k3s/services/ (admin-client pin tracks master/2.0.0, which
+  # carries no deployment/ tree). App source is the build context; nginx.conf comes from the
+  # `localdeploy` named build context. See k3s/services/README.md.
+  local acdir="$K3S_DIR/services/treetracker-admin-client"
+  docker build -t treetracker-admin-client:local -f "$acdir/Dockerfile" \
+    --build-context localdeploy="$acdir" "$ADMIN_CLIENT" \
     >/tmp/up-adminclient-build.log 2>&1 || die "admin-client image build failed (see /tmp/up-adminclient-build.log)"
   load_image "treetracker-admin-client:local"
-  k apply -f "$ADMIN_CLIENT/deployment/local/k8s.yaml" >/dev/null   # Deployment + Service + `/` Mapping
+  k apply -f "$acdir/k8s.yaml" >/dev/null   # Deployment + Service + `/` Mapping
   k -n admin-client rollout status deploy/treetracker-admin-client --timeout=180s
   [ "$ENV" = local ] && check_gateway
 }
@@ -314,7 +474,7 @@ SQL
 }
 
 run_all() {
-  step_cluster; step_infra_images; step_postgres; step_migrate; step_rabbitmq
+  step_cluster; step_coredns; step_infra_images; step_postgres; step_migrate; step_rabbitmq
   step_gateway   # BEFORE service overlays — they ship Ambassador Mappings (need the CRDs)
   step_field_data; step_treetracker_api; step_transformer_v2; step_processor; step_consumer
   step_admin; step_images_api; step_admin_client
@@ -325,6 +485,6 @@ trap stop_pf EXIT
 step_preflight
 case "${1:-all}" in
   all) run_all ;;
-  cluster|infra_images|postgres|migrate|rabbitmq|gateway|field_data|treetracker_api|images_api|transformer_v2|processor|consumer|keycloak|admin|admin_client) "step_${1}" ;;
-  *)   die "unknown step '${1}'. steps: cluster infra_images postgres migrate rabbitmq gateway field_data treetracker_api images_api transformer_v2 processor consumer keycloak admin admin_client (or 'all')" ;;
+  cluster|coredns|infra_images|postgres|migrate|rabbitmq|gateway|field_data|treetracker_api|images_api|transformer_v2|processor|consumer|keycloak|admin|admin_client) "step_${1}" ;;
+  *)   die "unknown step '${1}'. steps: cluster coredns infra_images postgres migrate rabbitmq gateway field_data treetracker_api images_api transformer_v2 processor consumer keycloak admin admin_client (or 'all')" ;;
 esac

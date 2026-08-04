@@ -18,7 +18,8 @@ CLUSTER="${CLUSTER:-greenstand}"
 CONTEXT="${KUBE_CONTEXT:-k3d-$CLUSTER}"
 NAMESPACES=(admin-client admin-api bulk-pack-services treetracker-api images-api field-data-api rabbitmq data emissary emissary-system)
 
-export PATH="/opt/homebrew/bin:$PATH"
+# Homebrew paths are macOS-only; guard so Linux does not prepend a nonexistent dir.
+[ "$(uname)" = Darwin ] && export PATH="/opt/homebrew/bin:$PATH"
 export NO_PROXY="0.0.0.0,127.0.0.1,localhost,::1,.svc,.cluster.local"
 export no_proxy="$NO_PROXY"
 c_grn=$'\033[32m'; c_red=$'\033[31m'; c_off=$'\033[0m'
