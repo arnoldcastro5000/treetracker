@@ -1,0 +1,23 @@
+# Local (k3d) overlay for images-api (image resize/proxy for admin /verify thumbnails).
+# Reuses the repo's base, but drops the Ambassador Mapping (the admin-client nginx proxies
+# /images/ → this service instead), uses the locally-built image, 1 replica, no DO affinity.
+# No DB env needed: the /img/:domain/:image resize route doesn't touch Postgres (knex is lazy),
+# matching how dev runs it env-less.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: images-api
+resources:
+  - ../../../images-api/deployment/base
+images:
+  - name: greenstand/images-api
+    newName: images-api
+    newTag: local
+replicas:
+  - name: images-api
+    count: 1
+patches:
+  # Ambassador Mapping KEPT (Emissary routes /images/ → this service, rewrite /).
+  - target: { kind: Deployment, name: images-api }
+    patch: |-
+      - op: remove
+        path: /spec/template/spec/affinity
