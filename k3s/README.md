@@ -7,16 +7,22 @@ clusters.
 
 ## Quick start (scripts)
 ```bash
-./k3s/prepare.sh     # ONCE per machine (macOS-specific): install tools (k3d/helm/awscli/libpq).
-./k3s/up.sh          # portable, idempotent: bring up the whole stack. Re-run to repair/continue.
+# 1. Install host tools ONCE per machine, pick the script for your OS:
+./k3s/prepare.sh       # macOS (Homebrew: k3d/helm/awscli/libpq)
+./k3s/prepare-linux.sh # Linux, incl. restricted-kernel sandboxes (kubectl/k3d/helm/psql, optional aws)
+
+# 2. Bring up, verify, tear down:
+./k3s/up.sh          # bring up the whole stack: idempotent, re-run to repair/continue.
                      #   single step: ./k3s/up.sh gateway | field_data | treetracker_api | admin_client | ...
+./k3s/smoke.sh       # verify: 17-check in-cluster smoke test (health, gateway, auth, DB, capture flow).
 ./k3s/down.sh        # tear down: delete the k3d cluster (all pods + data).
                      #   ./k3s/down.sh --namespaces   (keep cluster, drop stack namespaces)
                      #   ./k3s/down.sh --images        (also remove built/pulled images)
 ```
-`prepare.sh` = your-machine-specific bootstrap (Homebrew installs, ClashX/Docker proxy). `up.sh` = pure
-stack setup, same for local (`ENV=local`, k3d) and cloud CI (`ENV=ci KUBE_CONTEXT=… IMAGE_REGISTRY=…`).
-The sections below document what those scripts do, step by step.
+`prepare.sh` (macOS) and `prepare-linux.sh` (Linux) are your-machine-specific bootstrap: host tool
+installs only. `up.sh` = pure stack setup, same for local (`ENV=local`, k3d) and cloud CI
+(`ENV=ci KUBE_CONTEXT=… IMAGE_REGISTRY=…`). `smoke.sh` injects a forged capture and asserts it flows
+through to `field_data` (no device, no AWS). The sections below document what those scripts do, step by step.
 
 > ⚠️ **Context safety:** the kube context often reverts to the real dev cluster
 > `do-sfo2-dev-k8s-treetracker` across sessions. Before ANY `kubectl`/`apply`/`exec`, run
