@@ -11,6 +11,13 @@
 # Usage:
 #   ./k3s/up.sh                 # all steps
 #   ./k3s/up.sh postgres        # one step (cluster|infra_images|postgres|migrate|rabbitmq|field_data|...)
+#   ./k3s/up.sh --rebuild       # force rebuild every image even if already in the cluster
+#   ./k3s/up.sh --rebuild admin # force rebuild just one step's image
+#
+# Image builds are gated on presence in the cluster: a re-run SKIPS building/pulling any image
+# already in the node's containerd (so an already-up stack is reconciled, not rebuilt), and only
+# (re)builds images that are missing (self-heal after DiskPressure GC or `down.sh --images`).
+# `--rebuild` forces the build past that gate and rolls the affected deployment so new code loads.
 #
 set -euo pipefail
 
@@ -18,7 +25,10 @@ set -euo pipefail
 ENV="${ENV:-local}"
 CLUSTER="${CLUSTER:-greenstand}"
 CONTEXT="${KUBE_CONTEXT:-k3d-$CLUSTER}"
+NODE="${K3D_NODE:-k3d-${CLUSTER}-server-0}"   # the k3d server container (for containerd image queries)
 IMAGE_REGISTRY="${IMAGE_REGISTRY:-}"          # ci: registry to push to; empty ⇒ k3d image import
+REBUILD="${REBUILD:-0}"                        # 1 (or --rebuild) ⇒ build even if the image is already present
+DISK_WARN_PCT="${DISK_WARN_PCT:-80}"          # warn (only) before a build once the Docker disk is this full
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 K3S_DIR="$ROOT/k3s"
 NEXTGEN="$ROOT/treetracker-database-nextgen"
@@ -41,7 +51,7 @@ if ! command -v node >/dev/null 2>&1; then
 fi
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
-c_grn=$'\033[32m'; c_red=$'\033[31m'; c_dim=$'\033[2m'; c_off=$'\033[0m'
+c_grn=$'\033[32m'; c_red=$'\033[31m'; c_ylw=$'\033[33m'; c_dim=$'\033[2m'; c_off=$'\033[0m'
 log()  { echo "${c_grn}▶${c_off} $*"; }
 info() { echo "${c_dim}  $*${c_off}"; }
 die()  { echo "${c_red}✖ $*${c_off}" >&2; exit 1; }
@@ -73,6 +83,7 @@ pg_pod() { k -n data get pod -l app=postgres -o jsonpath='{.items[0].metadata.na
 
 ensure_image() {   # pull on host (retry transient EOF) if absent, then load into cluster
   local img="$1" i
+  if ! build_needed "$img"; then info "$img present in cluster -> skip pull"; return 0; fi
   if ! docker image inspect "$img" >/dev/null 2>&1; then
     for i in $(seq 1 10); do
       docker pull "$img" >/dev/null 2>&1 && break
@@ -111,6 +122,75 @@ load_image() {
   # the right call for never wedging the cluster over a few minutes of rebuild time.
   docker builder prune -f >/dev/null 2>&1 || true
 }
+# ── Image gate + self-heal ────────────────────────────────────────────────
+# Is <name:tag> already loaded in the k3d node's containerd? Local imports show as
+# docker.io/library/<name>:<tag> (or docker.io/<org>/<name>:<tag>), so match the repo tail + exact
+# tag. ENV=ci has no local node (images live in a registry) → always report absent so ci rebuilds.
+image_in_cluster() {   # $1 = name:tag
+  [ "$ENV" = local ] || return 1
+  local n="${1%:*}" t="${1##*:}"
+  docker exec "$NODE" crictl images 2>/dev/null \
+    | awk -v n="$n" -v t="$t" '$1 ~ ("(^|/)" n "$") && $2 == t {f=1} END{exit !f}'
+}
+# Should we build/pull <name:tag>? Yes if forced (--rebuild) or it is absent from the cluster.
+build_needed() {   # $1 = name:tag
+  [ "$REBUILD" = 1 ] && return 0
+  image_in_cluster "$1" && return 1
+  return 0
+}
+deploy_exists()  { k -n "$1" get deploy "$2" >/dev/null 2>&1; }
+deploy_healthy() {   # $1 ns  $2 deploy — 0 iff readyReplicas == spec.replicas and > 0
+  local want have
+  want=$(k -n "$1" get deploy "$2" -o jsonpath='{.spec.replicas}'        2>/dev/null || true)
+  have=$(k -n "$1" get deploy "$2" -o jsonpath='{.status.readyReplicas}' 2>/dev/null || true)
+  [ -n "$want" ] && [ "$want" != 0 ] && [ "${have:-0}" = "$want" ]
+}
+# Docker host and the k3d node share one small /var/lib/docker device; a cold rebuild can tip
+# kubelet into DiskPressure, which GCs the local-only :local images (unrecoverable). Warn once
+# before building if the disk is already high — warn only, never block (per test plan).
+_disk_warned=0
+disk_preflight() {
+  [ "$ENV" = local ] && [ "$_disk_warned" = 0 ] || return 0
+  local pct
+  pct=$(df -P /var/lib/docker 2>/dev/null | awk 'NR==2{gsub("%","",$5);print $5}')
+  [ -n "$pct" ] || pct=$(df -P / 2>/dev/null | awk 'NR==2{gsub("%","",$5);print $5}')
+  if [ -n "$pct" ] && [ "$pct" -ge "$DISK_WARN_PCT" ]; then
+    echo "${c_ylw}⚠ Docker disk ${pct}% full (>= ${DISK_WARN_PCT}%): a cold rebuild may trip kubelet DiskPressure and GC the local-only :local images. Proceeding (warn-only).${c_off}" >&2
+    _disk_warned=1
+  fi
+  return 0
+}
+# Build the image only if the gate says so, apply the overlay, then bring the Deployment to Ready.
+# Restart the pods only when we (re)built an image the Deployment was already using (so the new
+# same-tag :local image actually loads) OR the Deployment is unhealthy (self-heal). A healthy,
+# no-build re-run touches nothing → same ReplicaSet, same pods (idempotent).
+build_deploy() {   # $1 tag  $2 build-ctx  $3 kustomize-dir  $4 namespace  $5 deploy
+  local tag="$1" ctx="$2" kdir="$3" ns="$4" dep="$5" existed=0 built=0 logf="/tmp/up-${5}-build.log"
+  if deploy_exists "$ns" "$dep"; then existed=1; fi
+  if build_needed "$tag"; then
+    disk_preflight; info "building $tag"
+    docker build -t "$tag" "$ctx" >"$logf" 2>&1 || die "$dep image build failed (see $logf)"
+    load_image "$tag"; built=1
+  else
+    info "$tag present in cluster -> skip build"
+  fi
+  k apply -k "$kdir" >/dev/null
+  finish_deploy "$ns" "$dep" "$built" "$existed"
+}
+finish_deploy() {   # $1 ns  $2 deploy  $3 built(0|1)  $4 existed-before(0|1)
+  local ns="$1" dep="$2" built="$3" existed="$4" why=""
+  if [ "$existed" = 1 ]; then
+    if   [ "$built" = 1 ];              then why="rebuilt image"
+    elif ! deploy_healthy "$ns" "$dep"; then why="unhealthy"
+    fi
+  fi
+  if [ -n "$why" ]; then
+    info "$dep: $why -> rollout restart"
+    k -n "$ns" rollout restart "deploy/$dep" >/dev/null 2>&1 || true
+  fi
+  k -n "$ns" rollout status "deploy/$dep" --timeout=180s
+}
+
 wait_pg_ready() {
   local pod i; pod="$(pg_pod)"; [ -n "$pod" ] || die "no postgres pod"
   for i in $(seq 1 60); do
@@ -227,6 +307,8 @@ step_cluster() {
 step_coredns() {
   [ "$ENV" = local ] || { info "coredns: skipped (ENV=$ENV, not k3d)"; return 0; }
   log "coredns-custom (NXDOMAIN for *.docker.internal — musl getaddrinfo search-walk fix)"
+  local rv_before rv_after
+  rv_before=$(k -n kube-system get cm coredns-custom -o jsonpath='{.metadata.resourceVersion}' 2>/dev/null || true)
   k apply -f - >/dev/null <<'YAML' || die "coredns-custom apply failed"
 apiVersion: v1
 kind: ConfigMap
@@ -241,11 +323,22 @@ data:
       }
     }
 YAML
-  k -n kube-system rollout restart deploy/coredns >/dev/null
-  k -n kube-system rollout status deploy/coredns --timeout=120s
+  rv_after=$(k -n kube-system get cm coredns-custom -o jsonpath='{.metadata.resourceVersion}' 2>/dev/null || true)
+  # CoreDNS reloads the custom zone from the ConfigMap; only bounce it when that ConfigMap actually
+  # changed (or was just created). An unchanged config needs no restart, so re-runs stay idempotent
+  # (no CoreDNS pod churn) and faster. resourceVersion is stable across a no-op `kubectl apply`.
+  if [ "$rv_before" != "$rv_after" ]; then
+    info "coredns-custom changed (rv '${rv_before:-none}' -> '$rv_after') -> restart coredns"
+    k -n kube-system rollout restart deploy/coredns >/dev/null
+    k -n kube-system rollout status deploy/coredns --timeout=120s
+  else
+    info "coredns-custom unchanged -> skip coredns restart"
+  fi
 }
 
-step_infra_images() { log "infra images"; ensure_image "postgis/postgis:15-3.4"; ensure_image "rabbitmq:3.13-management"; }
+# Tags MUST match what the manifests deploy (postgres.yaml / rabbitmq.yaml) so the presence gate
+# recognizes them on a re-run and the node serves them locally (in-cluster containerd has no proxy).
+step_infra_images() { log "infra images"; ensure_image "postgis/postgis:15-3.4"; ensure_image "rabbitmq:3.13-management-alpine"; }
 
 step_postgres() {
   log "postgres"
@@ -327,46 +420,24 @@ EOF
   k apply -f "$K3S_DIR/emissary.yaml" >/dev/null   # Listener + wildcard Host
 }
 
-step_field_data() {
-  log "treetracker-field-data"
-  docker build -t treetracker-field-data:local "$ROOT/treetracker-field-data" >/tmp/up-fielddata-build.log 2>&1 \
-    || die "field-data image build failed (see /tmp/up-fielddata-build.log)"
-  load_image "treetracker-field-data:local"
-  k apply -k "$K3S_DIR/services/treetracker-field-data" >/dev/null
-  k -n field-data-api rollout status deploy/treetracker-field-data --timeout=180s
-}
+step_field_data()     { log "treetracker-field-data";      build_deploy treetracker-field-data:local    "$ROOT/treetracker-field-data"    "$K3S_DIR/services/treetracker-field-data"    field-data-api      treetracker-field-data; }
+step_treetracker_api(){ log "treetracker-api (grower_accounts)"; build_deploy treetracker-api:local  "$ROOT/treetracker-api"           "$K3S_DIR/services/treetracker-api"           treetracker-api     treetracker-api; }
+step_images_api()     { log "images-api (resize/proxy behind admin-client /images)"; build_deploy images-api:local "$ROOT/images-api" "$K3S_DIR/services/images-api"                images-api          images-api; }
+step_transformer_v2() { log "bulk-pack-transformer-v2";    build_deploy bulk-pack-transformer-v2:local  "$ROOT/bulk-pack-transformer-v2"  "$K3S_DIR/services/bulk-pack-transformer-v2"  bulk-pack-services  bulk-pack-transformer-v2; }
 
-step_treetracker_api() {
-  log "treetracker-api (grower_accounts)"
-  docker build -t treetracker-api:local "$ROOT/treetracker-api" >/tmp/up-tta-build.log 2>&1 \
-    || die "treetracker-api image build failed (see /tmp/up-tta-build.log)"
-  load_image "treetracker-api:local"
-  k apply -k "$K3S_DIR/services/treetracker-api" >/dev/null
-  k -n treetracker-api rollout status deploy/treetracker-api --timeout=180s
-}
-
-step_images_api() {
-  log "images-api (resize/proxy behind admin-client /images)"
-  docker build -t images-api:local "$ROOT/images-api" >/tmp/up-imgapi-build.log 2>&1 \
-    || die "images-api image build failed (see /tmp/up-imgapi-build.log)"
-  load_image "images-api:local"
-  k apply -k "$K3S_DIR/services/images-api" >/dev/null
-  k -n images-api rollout status deploy/images-api --timeout=180s
-}
-
-step_transformer_v2() {
-  log "bulk-pack-transformer-v2"
-  docker build -t bulk-pack-transformer-v2:local "$ROOT/bulk-pack-transformer-v2" >/tmp/up-btv2-build.log 2>&1 \
-    || die "transformer-v2 image build failed (see /tmp/up-btv2-build.log)"
-  load_image "bulk-pack-transformer-v2:local"
-  k apply -k "$K3S_DIR/services/bulk-pack-transformer-v2" >/dev/null
-  k -n bulk-pack-services rollout status deploy/bulk-pack-transformer-v2 --timeout=180s
-}
+# Processor is a CronJob (no Deployment): gate the build, apply the overlay. Its next scheduled Job
+# creates a fresh pod that pulls the current :local image from containerd, so no rollout restart.
 step_processor() {
   log "bulk-pack-processor (CronJob)"
-  docker build -t bulk-pack-processor:local "$ROOT/bulk-pack-processor" >/tmp/up-bpp-build.log 2>&1 \
-    || die "processor image build failed (see /tmp/up-bpp-build.log)"
-  load_image "bulk-pack-processor:local"
+  local tag=bulk-pack-processor:local
+  if build_needed "$tag"; then
+    disk_preflight; info "building $tag"
+    docker build -t "$tag" "$ROOT/bulk-pack-processor" >/tmp/up-bulk-pack-processor-build.log 2>&1 \
+      || die "processor image build failed (see /tmp/up-bulk-pack-processor-build.log)"
+    load_image "$tag"
+  else
+    info "$tag present in cluster -> skip build"
+  fi
   k apply -k "$K3S_DIR/services/bulk-pack-processor" >/dev/null
   info "cronjob scheduled (every minute); trigger now: kubectl -n bulk-pack-services create job bpp-now --from=cronjob/bulk-pack-processor"
 }
@@ -387,9 +458,16 @@ step_consumer() {
     info "  Enable it with: aws configure --profile ${AWS_PROFILE:-greenstand}"
     return 0
   fi
-  docker build -t bulk-pack-consumer:local "$ROOT/bulk-pack-consumer" >/tmp/up-bpc-build.log 2>&1 \
-    || die "consumer image build failed (see /tmp/up-bpc-build.log)"
-  load_image "bulk-pack-consumer:local"
+  local tag=bulk-pack-consumer:local ns=bulk-pack-services dep=bulk-pack-consumer existed=0 built=0
+  if deploy_exists "$ns" "$dep"; then existed=1; fi
+  if build_needed "$tag"; then
+    disk_preflight; info "building $tag"
+    docker build -t "$tag" "$ROOT/bulk-pack-consumer" >/tmp/up-bulk-pack-consumer-build.log 2>&1 \
+      || die "consumer image build failed (see /tmp/up-bulk-pack-consumer-build.log)"
+    load_image "$tag"; built=1
+  else
+    info "$tag present in cluster -> skip build"
+  fi
   # Secrets created imperatively (real AWS creds never land in git): DB + SQS URL literals,
   # AWS creds from the local `greenstand` CLI profile.
   k -n bulk-pack-services create secret generic bulk-pack-database-connection \
@@ -403,16 +481,12 @@ step_consumer() {
   k -n bulk-pack-services create secret generic aws-key --from-literal=secretAccessKey="$asec" \
     --dry-run=client -o yaml | k apply -f - >/dev/null
   k apply -k "$ROOT/bulk-pack-consumer/deployment/overlays/local" >/dev/null
-  k -n bulk-pack-services rollout status deploy/bulk-pack-consumer --timeout=180s
+  finish_deploy "$ns" "$dep" "$built" "$existed"
 }
 step_keycloak()       { info "SKIPPED: admin stack uses the legacy user system — no Keycloak needed"; }
 step_admin() {
   log "treetracker-admin-api"
-  docker build -t treetracker-admin-api:local "$ROOT/treetracker-admin-api" >/tmp/up-adminapi-build.log 2>&1 \
-    || die "admin-api image build failed (see /tmp/up-adminapi-build.log)"
-  load_image "treetracker-admin-api:local"
-  k apply -k "$K3S_DIR/services/treetracker-admin-api" >/dev/null
-  k -n admin-api rollout status deploy/treetracker-admin-api --timeout=180s
+  build_deploy treetracker-admin-api:local "$ROOT/treetracker-admin-api" "$K3S_DIR/services/treetracker-admin-api" admin-api treetracker-admin-api
   seed_admin_user
 }
 
@@ -422,12 +496,19 @@ step_admin_client() {
   # carries no deployment/ tree). App source is the build context; nginx.conf comes from the
   # `localdeploy` named build context. See k3s/services/README.md.
   local acdir="$K3S_DIR/services/treetracker-admin-client"
-  docker build -t treetracker-admin-client:local -f "$acdir/Dockerfile" \
-    --build-context localdeploy="$acdir" "$ADMIN_CLIENT" \
-    >/tmp/up-adminclient-build.log 2>&1 || die "admin-client image build failed (see /tmp/up-adminclient-build.log)"
-  load_image "treetracker-admin-client:local"
+  local tag=treetracker-admin-client:local ns=admin-client dep=treetracker-admin-client existed=0 built=0
+  if deploy_exists "$ns" "$dep"; then existed=1; fi
+  if build_needed "$tag"; then
+    disk_preflight; info "building $tag"
+    docker build -t "$tag" -f "$acdir/Dockerfile" \
+      --build-context localdeploy="$acdir" "$ADMIN_CLIENT" \
+      >/tmp/up-treetracker-admin-client-build.log 2>&1 || die "admin-client image build failed (see /tmp/up-treetracker-admin-client-build.log)"
+    load_image "$tag"; built=1
+  else
+    info "$tag present in cluster -> skip build"
+  fi
   k apply -f "$acdir/k8s.yaml" >/dev/null   # Deployment + Service + `/` Mapping
-  k -n admin-client rollout status deploy/treetracker-admin-client --timeout=180s
+  finish_deploy "$ns" "$dep" "$built" "$existed"
   [ "$ENV" = local ] && check_gateway
 }
 
@@ -481,10 +562,21 @@ run_all() {
   log "done — full capture→verify backend up on $CONTEXT (gateway: $GATEWAY_URL)"
 }
 
+# Args: an optional step name plus the optional --rebuild flag, in any order.
+STEP=""
+for a in "$@"; do
+  case "$a" in
+    --rebuild) REBUILD=1 ;;
+    -*)        die "unknown flag '$a' (only --rebuild is supported)" ;;
+    *)         [ -z "$STEP" ] && STEP="$a" || die "unexpected extra argument '$a'" ;;
+  esac
+done
+STEP="${STEP:-all}"
+
 trap stop_pf EXIT
 step_preflight
-case "${1:-all}" in
+case "$STEP" in
   all) run_all ;;
-  cluster|coredns|infra_images|postgres|migrate|rabbitmq|gateway|field_data|treetracker_api|images_api|transformer_v2|processor|consumer|keycloak|admin|admin_client) "step_${1}" ;;
-  *)   die "unknown step '${1}'. steps: cluster coredns infra_images postgres migrate rabbitmq gateway field_data treetracker_api images_api transformer_v2 processor consumer keycloak admin admin_client (or 'all')" ;;
+  cluster|coredns|infra_images|postgres|migrate|rabbitmq|gateway|field_data|treetracker_api|images_api|transformer_v2|processor|consumer|keycloak|admin|admin_client) "step_${STEP}" ;;
+  *)   die "unknown step '${STEP}'. steps: cluster coredns infra_images postgres migrate rabbitmq gateway field_data treetracker_api images_api transformer_v2 processor consumer keycloak admin admin_client (or 'all'); flags: --rebuild" ;;
 esac

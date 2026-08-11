@@ -62,7 +62,7 @@ fi
 
 if [ "$CLEAN_IMAGES" = 1 ]; then
   log "removing local images"
-  docker rmi -f treetracker-field-data:local treetracker-api:local images-api:local bulk-pack-transformer-v2:local bulk-pack-processor:local bulk-pack-consumer:local treetracker-admin-api:local treetracker-admin-client:local postgis/postgis:15-3.4 rabbitmq:3.13-management 2>/dev/null || true
+  docker rmi -f treetracker-field-data:local treetracker-api:local images-api:local bulk-pack-transformer-v2:local bulk-pack-processor:local bulk-pack-consumer:local treetracker-admin-api:local treetracker-admin-client:local postgis/postgis:15-3.4 rabbitmq:3.13-management-alpine 2>/dev/null || true
 fi
 
 log "down complete"
