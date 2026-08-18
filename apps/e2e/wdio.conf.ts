@@ -1,4 +1,10 @@
 import "dotenv/config";
+import { browser } from "@wdio/globals";
+import {
+  beginScreenRecording,
+  saveStepScreenshot,
+  endScreenRecording,
+} from "./utils/artifacts";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const config: any = {
@@ -71,5 +77,43 @@ export const config: any = {
     // polls /verify for up to 360s while the backend ingest pipeline catches up.
     timeout: 420000,
     ignoreUndefinedDefinitions: false,
+  },
+
+  // ─── Evidence capture (screenshots + full-scenario emulator video) ──────────
+  // Best-effort hooks; each helper swallows its own errors so capture never
+  // fails a test. Env-neutral: identical behavior locally and in CI, and a
+  // driver without screen recording degrades silently. See utils/artifacts.ts.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  beforeScenario: async function () {
+    await beginScreenRecording();
+  },
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  afterStep: async function (step: any, _scenario: any, result: any) {
+    await saveStepScreenshot(step?.text || "step");
+    // On a step failure, dump the UI hierarchy to stdout so the CI log (always
+    // reachable) shows exactly what was on screen and the real element ids,
+    // without depending on downloading the screenshot artifact.
+    //
+    // With E2E_DUMP_ALL set, dump after EVERY step (pass or fail). This is the
+    // tap-diagnosis mode: comparing the hierarchy before and after a passing
+    // "tap" step reveals whether the tap actually changed the screen, and the
+    // dumped nodes carry each control's clickable/bounds attributes.
+    const dumpAll = !!process.env.E2E_DUMP_ALL;
+    const failed = !!(result && result.passed === false);
+    if (dumpAll || failed) {
+      try {
+        const src = await browser.getPageSource();
+        const tag = failed ? "ON FAILURE" : "AFTER STEP";
+        console.log(
+          `\n===== PAGE SOURCE ${tag}: ${step?.text || ""} =====\n${src}\n===== END PAGE SOURCE =====\n`,
+        );
+      } catch {
+        // best-effort
+      }
+    }
+  },
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  afterScenario: async function (world: any) {
+    await endScreenRecording(world?.pickle?.name || "scenario");
   },
 };

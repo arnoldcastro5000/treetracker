@@ -10,6 +10,7 @@ import {
   tapText,
   tapDesc,
   tapRightArrow,
+  acceptPrivacyPolicy,
   tapSettingsIcon,
   tapFirstListItem,
   tapFirstListItemAndAdvance,
@@ -74,7 +75,7 @@ Then("I should see the messages screen", async () => {
 
 Then("I should see the capture screen", async () => {
   // Dismiss the one-shot capture tutorial if it appears (only on first reach
-  // per app install — subsequent visits skip it). Anchor on the unique capture
+  // per app install, subsequent visits skip it). Anchor on the unique capture
   // button afterwards, which is the only contentDescription specific to this
   // screen.
   try {
@@ -128,7 +129,7 @@ When("I select the first wallet and advance", async () => {
 });
 
 When("I accept the privacy policy", async () => {
-  await tapDesc("Accept Privacy Policy", 15000);
+  await acceptPrivacyPolicy();
 });
 
 When("I enter phone number {string}", async (phone: string) => {
@@ -164,7 +165,7 @@ Then("the admin panel verify page shows our note", async function (this: any) {
 });
 
 When("I accept the tree capture", async () => {
-  // The review tutorial overlay may still be up — dismiss it (idempotent)
+  // The review tutorial overlay may still be up, dismiss it (idempotent)
   // before targeting the Approve button.
   try {
     await tapDesc("Dismiss tutorial", 3000);
@@ -173,7 +174,7 @@ When("I accept the tree capture", async () => {
 });
 
 Then("I should be back on the capture screen", async () => {
-  // After approval, navigation pops back to TreeCaptureScreen — its capture
+  // After approval, navigation pops back to TreeCaptureScreen, its capture
   // button is the unique anchor (Dashboard / UserSelect / WalletSelect / AddOrg
   // none expose this contentDescription).
   await (await byDesc("Take tree photo")).waitForDisplayed({ timeout: 15000 });
@@ -190,7 +191,7 @@ When("I take a tree capture", async () => {
 Then("I should see the tree image review screen", async () => {
   // Wait for the screen to render first (NOTE button is unique to this screen,
   // theme-styled all-caps), then dismiss the one-shot review tutorial if it is
-  // still up. The tutorial may render slightly after NOTE — racing dismiss
+  // still up. The tutorial may render slightly after NOTE, racing dismiss
   // against waitForVisible can miss it on slow emulators.
   await waitForVisible("NOTE", 15000);
   try {

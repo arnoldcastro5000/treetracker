@@ -1,0 +1,129 @@
+# CI-hosted Android E2E: boots an accelerated emulator on a KVM-enabled runner,
+# runs the offline 02_signup_flow scenario, and uploads a full-scenario emulator
+# video plus per-step screenshots as a downloadable artifact.
+#
+# First-green target: 02_signup_flow (fully offline, no backend, no real secrets).
+# The APK builds with placeholder Android keys because 02 never touches S3/API.
+name: Android E2E
+
+on:
+  workflow_dispatch:
+    inputs:
+      spec:
+        description: "Feature file to run (relative to apps/e2e/features)"
+        default: "02_signup_flow.feature"
+  push:
+    branches:
+      - "**android-e2e**"
+  # Run on PRs that touch the e2e suite, the Android app, or this workflow, so
+  # reviewers see the emulator run as a check on the PR itself.
+  pull_request:
+    paths:
+      - "apps/e2e/**"
+      - "treetracker-android/**"
+      - ".github/workflows/android-e2e.yml"
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Gradle cache
+        uses: gradle/actions/setup-gradle@v4
+
+      # 02_signup_flow is offline, so the S3/API values are never used. These are
+      # dummy values that just let Gradle configuration resolve. loadExtraProperties
+      # calls project.setProperty, which only sets keys pre-declared in the root
+      # build.gradle allprojects{ext{...}} block, so the file must contain ONLY those
+      # 11 keys (this mirrors the Android repo's own pull_request.yml dummy file).
+      # Real values become secrets only when 03_capture_setup is added.
+      - name: Write dummy Android keys
+        run: |
+          cat > treetracker-android/treetracker.keys.properties <<'KEYS'
+          s3_production_identity_pool_id=placeholder
+          prod_treetracker_client_id=placeholder
+          prod_treetracker_client_secret=placeholder
+          s3_test_identity_pool_id=placeholder
+          test_treetracker_client_id=placeholder
+          test_treetracker_client_secret=placeholder
+          s3_dev_identity_pool_id=placeholder
+          dev_treetracker_client_id=placeholder
+          dev_treetracker_client_secret=placeholder
+          treetracker_client_id=placeholder
+          treetracker_client_secret=placeholder
+          KEYS
+
+      - name: Build debug APK
+        working-directory: treetracker-android
+        run: ./gradlew :app:assembleDebug --no-daemon --stacktrace
+
+      - name: Install e2e dependencies
+        working-directory: apps/e2e
+        run: npm ci
+
+      # Install Appium GLOBALLY so `appium` is on the system PATH inherited by every
+      # shell. The @wdio/appium-service spawns a bare `appium`, and the emulator-runner
+      # does not run its script lines in one persistent shell, so a per-line PATH export
+      # to node_modules/.bin does not reach the wdio process. The uiautomator2 driver
+      # installs into the default APPIUM_HOME (~/.appium), shared by the global appium.
+      # Pin the driver to the version the suite's lockfile resolves (3.10.0); the
+      # latest uiautomator2 (v4) requires Appium 3, which breaks against Appium 2.
+      - name: Install Appium and UiAutomator2 driver (global)
+        run: |
+          npm install -g appium@2.19.0
+          appium driver install uiautomator2@3.10.0
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Run E2E on emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        env:
+          APK_PATH: ${{ github.workspace }}/treetracker-android/app/build/outputs/apk/debug/app-debug.apk
+          APP_PACKAGE: org.greenstand.android.TreeTracker.debug
+          DEVICE_NAME: emulator-5554
+          CAPTURE_ARTIFACTS: "1"
+        with:
+          api-level: 30
+          target: google_apis
+          arch: x86_64
+          profile: pixel_5
+          disable-animations: true
+          working-directory: apps/e2e
+          emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back emulated -camera-front emulated
+          # Invoke the LOCAL wdio binary (not `npx wdio`, which fetches the deprecated
+          # `wdio` meta-package and launches an interactive wizard that hangs CI).
+          # Put node_modules/.bin on PATH so the @wdio/appium-service (command: "appium")
+          # finds the local Appium instead of failing with `spawn appium ENOENT`.
+          script: |
+            adb wait-for-device
+            export PATH="$(pwd)/node_modules/.bin:$PATH"
+            ./node_modules/.bin/wdio run ./wdio.conf.ts --spec "features/${{ github.event.inputs.spec || '02_signup_flow.feature' }}"
+
+      - name: Upload evidence artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-evidence
+          path: apps/e2e/test-artifacts/
+          if-no-files-found: warn

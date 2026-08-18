@@ -15,7 +15,7 @@ export const APP_PACKAGE =
 //   "Sensors" overlay: x=800–1027, y=2063–2189
 //
 // Jetpack Compose buttons do NOT set android:clickable=true in the UiAutomator2
-// accessibility tree — all icon button taps use coordinates.
+// accessibility tree, all icon button taps use coordinates.
 
 const ACTION_BAR_Y  = 2230;
 const RIGHT_BTN_X   = 860;   // left of the "D" badge (starts x=938)
@@ -39,13 +39,29 @@ export const byClass = (className: string, index = 0) =>
 // ─── Coordinate Tap ───────────────────────────────────────────────────────────
 
 export async function tapAt(x: number, y: number): Promise<void> {
-  await browser
-    .action("pointer", { parameters: { pointerType: "touch" } })
-    .move({ duration: 0, x, y })
-    .down({ button: 0 })
-    .pause(100)
-    .up({ button: 0 })
-    .perform();
+  const px = Math.round(x);
+  const py = Math.round(y);
+  // Prefer UiAutomator2's native click gesture. A raw W3C pointer action can land
+  // on the right pixel without triggering a Compose button's onClick (observed on
+  // this driver: an on-target tap on the forward arrow produced no navigation);
+  // clickGesture dispatches a real click and is reliable across Compose controls.
+  try {
+    await browser.execute("mobile: clickGesture", { x: px, y: py });
+    console.log(`[tapAt] clickGesture ok x=${px} y=${py}`);
+    return;
+  } catch (e) {
+    console.log(
+      `[tapAt] clickGesture FAILED x=${px} y=${py} err=${(e as Error)?.message || String(e)} -> W3C fallback`,
+    );
+    // Fallback for drivers without clickGesture.
+    await browser
+      .action("pointer", { parameters: { pointerType: "touch" } })
+      .move({ duration: 0, x: px, y: py })
+      .down({ button: 0 })
+      .pause(100)
+      .up({ button: 0 })
+      .perform();
+  }
 }
 
 // ─── Wait Helpers ─────────────────────────────────────────────────────────────
@@ -76,6 +92,17 @@ export async function isVisibleWithTimeout(text: string, timeout: number): Promi
 export async function tapText(text: string, timeout = 10000): Promise<void> {
   const el = await byText(text);
   await el.waitForDisplayed({ timeout });
+  // Compose text controls report clickable=false in the accessibility tree, so a
+  // WebDriver element .click() dispatches to a node the framework does not treat
+  // as interactive and the button's onClick never fires. Tap the centre of the
+  // element's real bounds by coordinate instead, which reaches the Compose
+  // pointerInput handler underneath.
+  const bounds = await el.getAttribute("bounds").catch(() => null);
+  const c = bounds ? boundsCentre(bounds) : null;
+  if (c) {
+    await tapAt(c.x, c.y);
+    return;
+  }
   await el.click();
 }
 
@@ -90,14 +117,106 @@ export async function tapSettingsIcon(): Promise<void> {
 }
 
 export async function tapRightArrow(): Promise<void> {
-  const btn = await byDesc("Navigate forward");
-  await btn.waitForDisplayed({ timeout: 8000 });
-  await btn.click();
+  // Preferred: content-description, present on app versions that label the arrow.
+  // Quick, non-blocking check so we don't wait the full timeout when it is absent.
+  try {
+    const btn = await byDesc("Navigate forward");
+    if (await btn.isDisplayed().catch(() => false)) {
+      await btn.click();
+      return;
+    }
+  } catch {
+    // fall through to the coordinate tap
+  }
+  // The forward ArrowButton is a TreeTrackerButton (pointerInput +
+  // detectTapGestures, not Modifier.clickable): no clickable / resource-id /
+  // description node, reachable only by coordinate. Its VISUAL centre is ~0.82w x
+  // 0.855h, but the language/credential screens draw a full-height content layer
+  // that intercepts a tap there; the arrow only receives taps a little lower, at
+  // ~0.82w x 0.88h (886,2059 on 1080x2340), pinned by a coordinate sweep in CI.
+  // Tap there and retry until the screen actually changes.
+  const before = await safeSource();
+  const changed = async () => (await safeSource()) !== before;
+  await tapFractionUntil(0.82, 0.88, changed, "tapRightArrow");
+}
+
+// Accept the Privacy Policy dialog. Its confirm control is an ApprovalButton
+// (TreeTrackerButton, contentDescription=null) centred horizontally at the
+// dialog's bottom, so it has no queryable node; tap by coordinate and retry
+// until the dialog's "Privacy Policy" title is gone.
+export async function acceptPrivacyPolicy(): Promise<void> {
+  await waitForVisible("Privacy Policy", 15000);
+  const gone = async () => !(await isVisible("Privacy Policy"));
+  await tapFractionUntil(0.5, 0.905, gone, "acceptPrivacyPolicy");
+}
+
+// Tap a screen-fraction point and retry until `success` holds. This app's Compose
+// controls are pointerInput{detectTapGestures} with no queryable node, so they can
+// only be driven by coordinate, and a tap can be dropped if sent before the
+// control settles. Each attempt tries clickGesture then a real `input tap`,
+// checking `success` between them so a working tap returns before the other fires.
+async function tapFractionUntil(
+  xFrac: number,
+  yFrac: number,
+  success: () => Promise<boolean>,
+  label = "tap",
+  tries = 5,
+): Promise<boolean> {
+  const { width, height } = await browser.getWindowSize();
+  const x = Math.round(width * xFrac);
+  const y = Math.round(height * yFrac);
+  for (let i = 0; i < tries; i++) {
+    await browser.pause(i === 0 ? 700 : 400);
+    await browser.execute("mobile: clickGesture", { x, y }).catch(() => {});
+    await browser.pause(500);
+    if (await success()) {
+      if (i > 0) console.log(`[${label}] succeeded via clickGesture on attempt ${i + 1}`);
+      return true;
+    }
+    await inputTap(x, y, label);
+    await browser.pause(500);
+    if (await success()) {
+      if (i > 0) console.log(`[${label}] succeeded via inputTap on attempt ${i + 1}`);
+      return true;
+    }
+    console.log(`[${label}] attempt ${i + 1} had no effect, retrying`);
+  }
+  console.log(`[${label}] gave up after ${tries} attempts`);
+  return false;
+}
+
+// Inject a genuine tap via `adb shell input tap` (relaxedSecurity is enabled on
+// the Appium server). This dispatches a real MotionEvent through the input
+// system, which Compose's detectTapGestures handles like a finger, unlike
+// mobile: clickGesture / W3C pointer actions which do not reliably fire it here.
+async function inputTap(x: number, y: number, label = "inputTap"): Promise<void> {
+  console.log(`[${label}] input tap ${x},${y}`);
+  await browser.execute("mobile: shell", {
+    command: "input",
+    args: ["tap", String(x), String(y)],
+  });
+}
+
+// getPageSource() that never throws, for cheap before/after screen comparisons.
+async function safeSource(): Promise<string> {
+  try {
+    return await browser.getPageSource();
+  } catch {
+    return "";
+  }
+}
+
+// Parse a UiAutomator2 bounds string "[x1,y1][x2,y2]" into its centre point.
+function boundsCentre(bounds: string): { x: number; y: number } | null {
+  const m = bounds.match(/\[(\d+),(\d+)\]\[(\d+),(\d+)\]/);
+  if (!m) return null;
+  const [x1, y1, x2, y2] = [+m[1], +m[2], +m[3], +m[4]];
+  return { x: Math.round((x1 + x2) / 2), y: Math.round((y1 + y2) / 2) };
 }
 
 /**
  * Tap the first list item (user/wallet card).
- * Prefers an element-based tap when an anchor text is provided — robust against
+ * Prefers an element-based tap when an anchor text is provided, robust against
  * grid-vs-list layout differences. Falls back to a coordinate tap otherwise.
  */
 export async function tapFirstListItem(anchorText?: string, timeout = 12000): Promise<void> {
@@ -132,7 +251,7 @@ export async function launchFresh(): Promise<void> {
   } catch {
     // clearApp is best-effort; ignore errors
   }
-  // clearApp revokes all runtime permissions — re-grant camera + location so the
+  // clearApp revokes all runtime permissions, re-grant camera + location so the
   // selfie capture activity and any GPS-gated screens don't hang on a system dialog.
   for (const perm of [
     "android.permission.CAMERA",
@@ -153,7 +272,7 @@ export async function launchFresh(): Promise<void> {
       longitude: -122.084,
       altitude: 0,
     });
-  } catch { /* best-effort — emulator may already have a location */ }
+  } catch { /* best-effort, emulator may already have a location */ }
   await browser.activateApp(APP_PACKAGE);
   await browser.pause(1500);
   // dismiss any system dialogs that appear on fresh launch
@@ -213,7 +332,7 @@ export async function advancePastSessionNote(): Promise<void> {
  *   Language Picker → Privacy Policy dialog → Credential Entry →
  *   Name Entry → Selfie → Image Review → Dashboard
  *
- * Also safe to call when already on the Dashboard — returns immediately.
+ * Also safe to call when already on the Dashboard, returns immediately.
  */
 export async function ensureOnDashboard(): Promise<void> {
   if (await isVisible("UPLOAD")) return;
@@ -263,27 +382,35 @@ export async function ensureOnDashboard(): Promise<void> {
   await dismissSystemDialogsIfPresent();
 
   // ── Selfie Tutorial Dialog ───────────────────────────────────────────────
+  // SelfieScreen shows a tutorial ("Click on ... to take a selfie...") whose
+  // dismiss control is a checkmark (TreeTrackerButton, contentDescription=null)
+  // at the dialog's bottom-centre. Tap by coordinate until the tutorial is gone.
   if (await isVisibleWithTimeout("Click on", 8000)) {
-    await tapDesc("Dismiss tutorial", 8000);
-    // Wait for the next anchor (capture button) instead of a fixed pause.
-    await (await byDesc("Take selfie")).waitForDisplayed({ timeout: 15000 });
+    // The tutorial is a Material AlertDialog centred on screen (bounds seen at
+    // ~[100,635][980,1717]); its dismiss checkmark sits at the dialog's
+    // bottom-centre, ~0.5w x 0.69h, NOT at the screen bottom.
+    const dismissed = async () => !(await isVisible("Click on"));
+    await tapFractionUntil(0.5, 0.69, dismissed, "dismissSelfieTutorial");
   }
 
   // ── Selfie Screen ────────────────────────────────────────────────────────
+  // The CaptureButton is the bottom ActionBar's centre action (no queryable
+  // node), at ~0.5w x 0.88h. Capturing navigates to the review screen, so retry
+  // until the page changes (the a11y tree is stable except for that navigation).
   if (!(await isVisible("UPLOAD"))) {
-    const takeSelfie = await byDesc("Take selfie");
-    await takeSelfie.waitForDisplayed({ timeout: 15000 });
-    await takeSelfie.click();
-    // Wait until the review screen renders (Approve appears) — guarantees the
-    // capture-then-transition completed, regardless of camera latency.
-    await (await byDesc("Approve selfie")).waitForDisplayed({ timeout: 20000 });
+    const beforeCapture = await safeSource();
+    const captured = async () =>
+      (await isVisible("UPLOAD")) || (await safeSource()) !== beforeCapture;
+    await tapFractionUntil(0.5, 0.88, captured, "takeSelfie");
+    await browser.pause(1500);
   }
 
   // ── Image Review Screen ──────────────────────────────────────────────────
+  // Reject/approve are a centred ApprovalButton pair (no queryable node); the
+  // approval (right) button sits at ~0.6w x 0.9h. Retry until the dashboard shows.
   if (!(await isVisible("UPLOAD"))) {
-    const approve = await byDesc("Approve selfie");
-    await approve.waitForDisplayed({ timeout: 8000 });
-    await approve.click();
+    const onDashboard = async () => await isVisible("UPLOAD");
+    await tapFractionUntil(0.6, 0.9, onDashboard, "approveSelfie");
   }
 
   await waitForVisible("UPLOAD", 30000);
