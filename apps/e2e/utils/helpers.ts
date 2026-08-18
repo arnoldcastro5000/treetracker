@@ -128,16 +128,41 @@ export async function tapRightArrow(): Promise<void> {
   } catch {
     // fall through to the coordinate tap
   }
-  // The forward ArrowButton is a TreeTrackerButton (pointerInput +
-  // detectTapGestures, not Modifier.clickable): no clickable / resource-id /
-  // description node, reachable only by coordinate at the ActionBar right-third
-  // centre, ~0.82w x 0.855h (886,2001 on 1080x2340). Its detectTapGestures also
-  // ignores a tap sent before the enable state/tween settles, and that settle is
-  // not a fixed delay, so tap-and-retry until the screen actually changes rather
-  // than guessing a single delay.
+  // DIAGNOSTIC SWEEP: the forward ArrowButton has no accessibility node at all
+  // and taps at its visual centre (886,2001) do not fire it, yet an earlier probe
+  // navigated from some other point. Sweep coordinates x methods and log which
+  // (point, method) actually leaves the screen, so the real handler can lock it in.
+  await browser.pause(800);
+  const { width, height } = await browser.getWindowSize();
   const before = await safeSource();
   const changed = async () => (await safeSource()) !== before;
-  await tapFractionUntil(0.82, 0.855, changed, "tapRightArrow");
+  const pts: Array<[number, number]> = [
+    [0.82, 0.855],
+    [0.82, 0.88],
+    [0.82, 0.9],
+    [0.82, 0.92],
+    [0.77, 0.855],
+    [0.87, 0.855],
+    [0.82, 0.83],
+  ];
+  for (const [xf, yf] of pts) {
+    const x = Math.round(width * xf);
+    const y = Math.round(height * yf);
+    for (const method of ["clickGesture", "inputTap"] as const) {
+      if (method === "clickGesture") {
+        await browser.execute("mobile: clickGesture", { x, y }).catch(() => {});
+      } else {
+        await inputTap(x, y, "sweep");
+      }
+      await browser.pause(600);
+      if (await changed()) {
+        console.log(`[tapRightArrow] SWEEP HIT ${method} @ ${x},${y} (${xf},${yf})`);
+        return;
+      }
+      console.log(`[tapRightArrow] sweep miss ${method} @ ${x},${y}`);
+    }
+  }
+  console.log("[tapRightArrow] SWEEP exhausted, nothing navigated");
 }
 
 // Accept the Privacy Policy dialog. Its confirm control is an ApprovalButton
