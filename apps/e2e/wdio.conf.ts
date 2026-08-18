@@ -93,11 +93,19 @@ export const config: any = {
     // On a step failure, dump the UI hierarchy to stdout so the CI log (always
     // reachable) shows exactly what was on screen and the real element ids,
     // without depending on downloading the screenshot artifact.
-    if (result && result.passed === false) {
+    //
+    // With E2E_DUMP_ALL set, dump after EVERY step (pass or fail). This is the
+    // tap-diagnosis mode: comparing the hierarchy before and after a passing
+    // "tap" step reveals whether the tap actually changed the screen, and the
+    // dumped nodes carry each control's clickable/bounds attributes.
+    const dumpAll = !!process.env.E2E_DUMP_ALL;
+    const failed = !!(result && result.passed === false);
+    if (dumpAll || failed) {
       try {
         const src = await browser.getPageSource();
+        const tag = failed ? "ON FAILURE" : "AFTER STEP";
         console.log(
-          `\n===== PAGE SOURCE ON FAILURE: ${step?.text || ""} =====\n${src}\n===== END PAGE SOURCE =====\n`,
+          `\n===== PAGE SOURCE ${tag}: ${step?.text || ""} =====\n${src}\n===== END PAGE SOURCE =====\n`,
         );
       } catch {
         // best-effort

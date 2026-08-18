@@ -96,6 +96,10 @@ jobs:
           APP_PACKAGE: org.greenstand.android.TreeTracker.debug
           DEVICE_NAME: emulator-5554
           CAPTURE_ARTIFACTS: "1"
+          # Tap-diagnosis run: dump the UI hierarchy after every step so the log
+          # shows whether the ENGLISH tap changed the screen and each control's
+          # clickable/bounds attributes. Remove once the root cause is settled.
+          E2E_DUMP_ALL: "1"
         with:
           api-level: 30
           target: google_apis
