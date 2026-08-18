@@ -23,3 +23,6 @@ Thumbs.db
 
 node_modules
 test-artifacts
+
+# Keep the e2e config template tracked (broad .env* rule above ignores it)
+!apps/e2e/.env.example

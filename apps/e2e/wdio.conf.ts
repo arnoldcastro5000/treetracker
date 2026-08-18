@@ -1,4 +1,9 @@
 import "dotenv/config";
+import {
+  beginScreenRecording,
+  saveStepScreenshot,
+  endScreenRecording,
+} from "./utils/artifacts";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const config: any = {
@@ -71,5 +76,22 @@ export const config: any = {
     // polls /verify for up to 360s while the backend ingest pipeline catches up.
     timeout: 420000,
     ignoreUndefinedDefinitions: false,
+  },
+
+  // ─── Evidence capture (screenshots + full-scenario emulator video) ──────────
+  // Best-effort hooks; each helper swallows its own errors so capture never
+  // fails a test. Env-neutral: identical behavior locally and in CI, and a
+  // driver without screen recording degrades silently. See utils/artifacts.ts.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  beforeScenario: async function () {
+    await beginScreenRecording();
+  },
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  afterStep: async function (step: any) {
+    await saveStepScreenshot(step?.text || "step");
+  },
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  afterScenario: async function (world: any) {
+    await endScreenRecording(world?.pickle?.name || "scenario");
   },
 };

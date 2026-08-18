@@ -1,0 +1,108 @@
+# CI-hosted Android E2E: boots an accelerated emulator on a KVM-enabled runner,
+# runs the offline 02_signup_flow scenario, and uploads a full-scenario emulator
+# video plus per-step screenshots as a downloadable artifact.
+#
+# First-green target: 02_signup_flow (fully offline, no backend, no real secrets).
+# The APK builds with placeholder Android keys because 02 never touches S3/API.
+name: Android E2E
+
+on:
+  workflow_dispatch:
+    inputs:
+      spec:
+        description: "Feature file to run (relative to apps/e2e/features)"
+        default: "02_signup_flow.feature"
+  push:
+    branches:
+      - "**android-e2e**"
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Gradle cache
+        uses: gradle/actions/setup-gradle@v4
+
+      # 02_signup_flow is offline, so the S3/API values are never used. Placeholder
+      # keys just let Gradle configuration resolve. Real values become secrets only
+      # when 03_capture_setup is added.
+      - name: Write placeholder Android keys
+        run: |
+          cat > treetracker-android/treetracker.keys.properties <<'KEYS'
+          s3_dev_identity_pool_id=placeholder
+          s3_test_identity_pool_id=placeholder
+          s3_production_identity_pool_id=placeholder
+          dev_treetracker_client_id=placeholder
+          dev_treetracker_client_secret=placeholder
+          test_treetracker_client_id=placeholder
+          test_treetracker_client_secret=placeholder
+          prod_treetracker_client_id=placeholder
+          prod_treetracker_client_secret=placeholder
+          release_store_file=placeholder
+          release_store_password=placeholder
+          release_key_alias=placeholder
+          release_key_password=placeholder
+          KEYS
+
+      - name: Build debug APK
+        working-directory: treetracker-android
+        run: ./gradlew :app:assembleDebug --no-daemon --stacktrace
+
+      - name: Install e2e dependencies
+        working-directory: apps/e2e
+        run: npm ci
+
+      - name: Install Appium UiAutomator2 driver
+        working-directory: apps/e2e
+        run: npx appium driver install uiautomator2 || true
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Run E2E on emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        env:
+          APK_PATH: ${{ github.workspace }}/treetracker-android/app/build/outputs/apk/debug/app-debug.apk
+          APP_PACKAGE: org.greenstand.android.TreeTracker.debug
+          DEVICE_NAME: emulator-5554
+          CAPTURE_ARTIFACTS: "1"
+        with:
+          api-level: 30
+          target: google_apis
+          arch: x86_64
+          profile: pixel_5
+          disable-animations: true
+          emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back emulated -camera-front emulated
+          script: |
+            adb wait-for-device
+            cd apps/e2e
+            npx wdio run ./wdio.conf.ts --spec "features/${{ github.event.inputs.spec || '02_signup_flow.feature' }}"
+
+      - name: Upload evidence artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-evidence
+          path: apps/e2e/test-artifacts/
+          if-no-files-found: warn
