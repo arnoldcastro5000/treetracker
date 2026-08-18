@@ -47,8 +47,12 @@ export async function tapAt(x: number, y: number): Promise<void> {
   // clickGesture dispatches a real click and is reliable across Compose controls.
   try {
     await browser.execute("mobile: clickGesture", { x: px, y: py });
+    console.log(`[tapAt] clickGesture ok x=${px} y=${py}`);
     return;
-  } catch {
+  } catch (e) {
+    console.log(
+      `[tapAt] clickGesture FAILED x=${px} y=${py} err=${(e as Error)?.message || String(e)} -> W3C fallback`,
+    );
     // Fallback for drivers without clickGesture.
     await browser
       .action("pointer", { parameters: { pointerType: "touch" } })
@@ -119,6 +123,7 @@ export async function tapRightArrow(): Promise<void> {
   // position relative to the real window size (density/resolution independent). The
   // button is ~62dp, so the target has ample margin around this point.
   const { width, height } = await browser.getWindowSize();
+  console.log(`[tapRightArrow] window=${width}x${height} -> tap ${Math.round(width * 0.82)},${Math.round(height * 0.855)}`);
   await tapAt(Math.round(width * 0.82), Math.round(height * 0.855));
 }
 
