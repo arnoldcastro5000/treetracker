@@ -92,6 +92,17 @@ export async function isVisibleWithTimeout(text: string, timeout: number): Promi
 export async function tapText(text: string, timeout = 10000): Promise<void> {
   const el = await byText(text);
   await el.waitForDisplayed({ timeout });
+  // Compose text controls report clickable=false in the accessibility tree, so a
+  // WebDriver element .click() dispatches to a node the framework does not treat
+  // as interactive and the button's onClick never fires. Tap the centre of the
+  // element's real bounds by coordinate instead, which reaches the Compose
+  // pointerInput handler underneath.
+  const bounds = await el.getAttribute("bounds").catch(() => null);
+  const c = bounds ? boundsCentre(bounds) : null;
+  if (c) {
+    await tapAt(c.x, c.y);
+    return;
+  }
   await el.click();
 }
 
@@ -146,10 +157,11 @@ function boundsCentre(bounds: string): { x: number; y: number } | null {
   return { x: Math.round((x1 + x2) / 2), y: Math.round((y1 + y2) / 2) };
 }
 
-// Find the bottom-right-most clickable node's centre. The forward arrow is the
-// sole clickable control in the bottom ActionBar's right slot, so restricting to
-// the bottom-right region and taking the right-most match isolates it even when a
-// screen has other clickable controls (e.g. a text field on the credential step).
+// Find the forward-arrow node's centre. The arrow sits centred in the bottom
+// ActionBar's right third (~0.83 of the width) and only exposes clickable=true
+// once a selection enables it. The debug build also renders a small circular "D"
+// HUD badge hard in the bottom-right corner (~0.92 of the width); exclude that
+// corner so we target the arrow, not the badge, then take the right-most match.
 async function bottomRightClickableCentre(
   width: number,
   height: number,
@@ -161,7 +173,9 @@ async function bottomRightClickableCentre(
     if (!bounds) continue;
     const c = boundsCentre(bounds);
     if (!c) continue;
-    if (c.x < width * 0.55 || c.y < height * 0.7) continue; // bottom-right region only
+    // Bottom ActionBar band, right side, but not the extreme corner (D badge).
+    if (c.y < height * 0.82) continue;
+    if (c.x < width * 0.5 || c.x > width * 0.88) continue;
     if (!best || c.x > best.x) best = c;
   }
   return best;
