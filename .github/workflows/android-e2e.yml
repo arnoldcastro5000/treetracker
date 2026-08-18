@@ -40,25 +40,26 @@ jobs:
       - name: Gradle cache
         uses: gradle/actions/setup-gradle@v4
 
-      # 02_signup_flow is offline, so the S3/API values are never used. Placeholder
-      # keys just let Gradle configuration resolve. Real values become secrets only
-      # when 03_capture_setup is added.
-      - name: Write placeholder Android keys
+      # 02_signup_flow is offline, so the S3/API values are never used. These are
+      # dummy values that just let Gradle configuration resolve. loadExtraProperties
+      # calls project.setProperty, which only sets keys pre-declared in the root
+      # build.gradle allprojects{ext{...}} block, so the file must contain ONLY those
+      # 11 keys (this mirrors the Android repo's own pull_request.yml dummy file).
+      # Real values become secrets only when 03_capture_setup is added.
+      - name: Write dummy Android keys
         run: |
           cat > treetracker-android/treetracker.keys.properties <<'KEYS'
-          s3_dev_identity_pool_id=placeholder
-          s3_test_identity_pool_id=placeholder
           s3_production_identity_pool_id=placeholder
-          dev_treetracker_client_id=placeholder
-          dev_treetracker_client_secret=placeholder
-          test_treetracker_client_id=placeholder
-          test_treetracker_client_secret=placeholder
           prod_treetracker_client_id=placeholder
           prod_treetracker_client_secret=placeholder
-          release_store_file=placeholder
-          release_store_password=placeholder
-          release_key_alias=placeholder
-          release_key_password=placeholder
+          s3_test_identity_pool_id=placeholder
+          test_treetracker_client_id=placeholder
+          test_treetracker_client_secret=placeholder
+          s3_dev_identity_pool_id=placeholder
+          dev_treetracker_client_id=placeholder
+          dev_treetracker_client_secret=placeholder
+          treetracker_client_id=placeholder
+          treetracker_client_secret=placeholder
           KEYS
 
       - name: Build debug APK
