@@ -75,10 +75,12 @@ jobs:
       # does not run its script lines in one persistent shell, so a per-line PATH export
       # to node_modules/.bin does not reach the wdio process. The uiautomator2 driver
       # installs into the default APPIUM_HOME (~/.appium), shared by the global appium.
+      # Pin the driver to the version the suite's lockfile resolves (3.10.0); the
+      # latest uiautomator2 (v4) requires Appium 3, which breaks against Appium 2.
       - name: Install Appium and UiAutomator2 driver (global)
         run: |
-          npm install -g appium@^2
-          appium driver install uiautomator2
+          npm install -g appium@2.19.0
+          appium driver install uiautomator2@3.10.0
 
       - name: Enable KVM
         run: |
