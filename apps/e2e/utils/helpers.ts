@@ -90,9 +90,24 @@ export async function tapSettingsIcon(): Promise<void> {
 }
 
 export async function tapRightArrow(): Promise<void> {
-  const btn = await byDesc("Navigate forward");
-  await btn.waitForDisplayed({ timeout: 8000 });
-  await btn.click();
+  // Preferred: content-description, present on app versions that label the arrow.
+  // Quick, non-blocking check so we don't wait the full timeout when it is absent.
+  try {
+    const btn = await byDesc("Navigate forward");
+    if (await btn.isDisplayed().catch(() => false)) {
+      await btn.click();
+      return;
+    }
+  } catch {
+    // fall through to the coordinate tap
+  }
+  // Fallback: the forward ArrowButton lives in the bottom ActionBar's right slot,
+  // and at the current app commit its Image sets contentDescription=null, so it has
+  // no queryable semantics (no text, no description, no resource-id). Tap it by
+  // position relative to the real window size (density/resolution independent). The
+  // button is ~62dp, so the target has ample margin around this point.
+  const { width, height } = await browser.getWindowSize();
+  await tapAt(Math.round(width * 0.82), Math.round(height * 0.855));
 }
 
 /**
