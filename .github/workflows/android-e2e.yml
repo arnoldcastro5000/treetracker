@@ -94,11 +94,13 @@ jobs:
           arch: x86_64
           profile: pixel_5
           disable-animations: true
+          working-directory: apps/e2e
           emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back emulated -camera-front emulated
+          # Invoke the LOCAL wdio binary (not `npx wdio`, which fetches the deprecated
+          # `wdio` meta-package and launches an interactive wizard that hangs CI).
           script: |
             adb wait-for-device
-            cd apps/e2e
-            npx wdio run ./wdio.conf.ts --spec "features/${{ github.event.inputs.spec || '02_signup_flow.feature' }}"
+            ./node_modules/.bin/wdio run ./wdio.conf.ts --spec "features/${{ github.event.inputs.spec || '02_signup_flow.feature' }}"
 
       - name: Upload evidence artifacts
         if: always()
