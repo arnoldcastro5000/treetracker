@@ -1,4 +1,4 @@
-import { $, $$, browser } from "@wdio/globals";
+import { $, browser } from "@wdio/globals";
 
 // Must match the wdio cap `appium:appPackage`. Read from env so the suite can
 // target any build (local/dev/prod) without code changes.
@@ -128,25 +128,36 @@ export async function tapRightArrow(): Promise<void> {
   } catch {
     // fall through to the coordinate tap
   }
-  // Fallback: the forward ArrowButton has contentDescription=null at the current
-  // app commit, so it has no description/text/resource-id to query. But it IS the
-  // one control the framework exposes as clickable=true in the accessibility tree
-  // (the Compose language/text controls report clickable=false). Locate that node
-  // and tap the centre of its real bounds, rather than guessing a screen fraction.
-  // The arrow sits in the bottom ActionBar's right slot, so among clickable nodes
-  // pick the bottom-right one.
+  // The forward ArrowButton is a TreeTrackerButton, whose click is a
+  // pointerInput { detectTapGestures } rather than Modifier.clickable, so it
+  // exposes NO clickable / resource-id / description node in the accessibility
+  // tree and can only be reached by coordinate. It sits centred in the bottom
+  // ActionBar's right third; screenshots confirm its centre at ~0.82 width,
+  // ~0.855 height (e.g. 886,2001 on 1080x2340).
+  //
+  // detectTapGestures.onTap fires on a real touch up, and mobile: clickGesture
+  // does not reliably trigger it on this control. A W3C pointer press/hold/release
+  // injects a genuine MotionEvent that it does. Selecting a language also enables
+  // the arrow via a short state change + tween, so settle briefly first.
+  await browser.pause(600);
   const { width, height } = await browser.getWindowSize();
-  const target = await bottomRightClickableCentre(width, height);
-  if (target) {
-    console.log(`[tapRightArrow] clickable arrow centre ${target.x},${target.y}`);
-    await tapAt(target.x, target.y);
-    return;
-  }
-  // Last resort: no clickable node found; fall back to the positional estimate.
-  console.log(
-    `[tapRightArrow] no clickable node; window=${width}x${height} -> tap ${Math.round(width * 0.82)},${Math.round(height * 0.855)}`,
-  );
-  await tapAt(Math.round(width * 0.82), Math.round(height * 0.855));
+  const x = Math.round(width * 0.82);
+  const y = Math.round(height * 0.855);
+  console.log(`[tapRightArrow] W3C touch ${x},${y} on ${width}x${height}`);
+  await w3cTap(x, y);
+}
+
+// A W3C pointer-touch tap: press, brief hold, release. Injects a real MotionEvent
+// sequence, which Compose's detectTapGestures requires (mobile: clickGesture does
+// not always fire it). Prefer this for gesture-detector controls.
+export async function w3cTap(x: number, y: number): Promise<void> {
+  await browser
+    .action("pointer", { parameters: { pointerType: "touch" } })
+    .move({ duration: 0, x: Math.round(x), y: Math.round(y) })
+    .down({ button: 0 })
+    .pause(120)
+    .up({ button: 0 })
+    .perform();
 }
 
 // Parse a UiAutomator2 bounds string "[x1,y1][x2,y2]" into its centre point.
@@ -155,30 +166,6 @@ function boundsCentre(bounds: string): { x: number; y: number } | null {
   if (!m) return null;
   const [x1, y1, x2, y2] = [+m[1], +m[2], +m[3], +m[4]];
   return { x: Math.round((x1 + x2) / 2), y: Math.round((y1 + y2) / 2) };
-}
-
-// Find the forward-arrow node's centre. The arrow sits centred in the bottom
-// ActionBar's right third (~0.83 of the width) and only exposes clickable=true
-// once a selection enables it. The debug build also renders a small circular "D"
-// HUD badge hard in the bottom-right corner (~0.92 of the width); exclude that
-// corner so we target the arrow, not the badge, then take the right-most match.
-async function bottomRightClickableCentre(
-  width: number,
-  height: number,
-): Promise<{ x: number; y: number } | null> {
-  const els = await $$('android=new UiSelector().clickable(true)');
-  let best: { x: number; y: number } | null = null;
-  for (const el of els) {
-    const bounds = await el.getAttribute("bounds").catch(() => null);
-    if (!bounds) continue;
-    const c = boundsCentre(bounds);
-    if (!c) continue;
-    // Bottom ActionBar band, right side, but not the extreme corner (D badge).
-    if (c.y < height * 0.82) continue;
-    if (c.x < width * 0.5 || c.x > width * 0.88) continue;
-    if (!best || c.x > best.x) best = c;
-  }
-  return best;
 }
 
 /**
