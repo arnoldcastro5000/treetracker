@@ -70,9 +70,15 @@ jobs:
         working-directory: apps/e2e
         run: npm ci
 
-      - name: Install Appium UiAutomator2 driver
-        working-directory: apps/e2e
-        run: npx appium driver install uiautomator2 || true
+      # Install Appium GLOBALLY so `appium` is on the system PATH inherited by every
+      # shell. The @wdio/appium-service spawns a bare `appium`, and the emulator-runner
+      # does not run its script lines in one persistent shell, so a per-line PATH export
+      # to node_modules/.bin does not reach the wdio process. The uiautomator2 driver
+      # installs into the default APPIUM_HOME (~/.appium), shared by the global appium.
+      - name: Install Appium and UiAutomator2 driver (global)
+        run: |
+          npm install -g appium@^2
+          appium driver install uiautomator2
 
       - name: Enable KVM
         run: |
