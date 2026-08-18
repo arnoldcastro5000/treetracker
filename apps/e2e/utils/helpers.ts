@@ -386,8 +386,11 @@ export async function ensureOnDashboard(): Promise<void> {
   // dismiss control is a checkmark (TreeTrackerButton, contentDescription=null)
   // at the dialog's bottom-centre. Tap by coordinate until the tutorial is gone.
   if (await isVisibleWithTimeout("Click on", 8000)) {
+    // The tutorial is a Material AlertDialog centred on screen (bounds seen at
+    // ~[100,635][980,1717]); its dismiss checkmark sits at the dialog's
+    // bottom-centre, ~0.5w x 0.69h, NOT at the screen bottom.
     const dismissed = async () => !(await isVisible("Click on"));
-    await tapFractionUntil(0.5, 0.905, dismissed, "dismissSelfieTutorial");
+    await tapFractionUntil(0.5, 0.69, dismissed, "dismissSelfieTutorial");
   }
 
   // ── Selfie Screen ────────────────────────────────────────────────────────
