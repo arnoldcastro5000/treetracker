@@ -98,8 +98,11 @@ jobs:
           emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back emulated -camera-front emulated
           # Invoke the LOCAL wdio binary (not `npx wdio`, which fetches the deprecated
           # `wdio` meta-package and launches an interactive wizard that hangs CI).
+          # Put node_modules/.bin on PATH so the @wdio/appium-service (command: "appium")
+          # finds the local Appium instead of failing with `spawn appium ENOENT`.
           script: |
             adb wait-for-device
+            export PATH="$(pwd)/node_modules/.bin:$PATH"
             ./node_modules/.bin/wdio run ./wdio.conf.ts --spec "features/${{ github.event.inputs.spec || '02_signup_flow.feature' }}"
 
       - name: Upload evidence artifacts
