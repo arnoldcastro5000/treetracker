@@ -128,34 +128,63 @@ export async function tapRightArrow(): Promise<void> {
   } catch {
     // fall through to the coordinate tap
   }
-  // The forward ArrowButton is a TreeTrackerButton, whose click is a
-  // pointerInput { detectTapGestures } rather than Modifier.clickable, so it
-  // exposes NO clickable / resource-id / description node in the accessibility
-  // tree and can only be reached by coordinate. It sits centred in the bottom
-  // ActionBar's right third; screenshots confirm its centre at ~0.82 width,
-  // ~0.855 height (e.g. 886,2001 on 1080x2340).
-  //
-  // detectTapGestures.onTap fires on a real touch up, and mobile: clickGesture
-  // does not reliably trigger it on this control. A W3C pointer press/hold/release
-  // injects a genuine MotionEvent that it does. Selecting a language also enables
-  // the arrow via a short state change + tween, so settle briefly first.
+  // DIAGNOSTIC MODE: the forward ArrowButton (a TreeTrackerButton using
+  // pointerInput{detectTapGestures}) exposes no queryable node and, at its
+  // screenshot-confirmed centre (~886,2001 on 1080x2340), has not fired via
+  // clickGesture or a single W3C tap even though the same control type works for
+  // the language buttons. Try several tap variants and log which one actually
+  // leaves the language screen, so we can lock in the working method.
   await browser.pause(600);
   const { width, height } = await browser.getWindowSize();
-  const x = Math.round(width * 0.82);
-  const y = Math.round(height * 0.855);
-  console.log(`[tapRightArrow] W3C touch ${x},${y} on ${width}x${height}`);
-  await w3cTap(x, y);
+  const cx = Math.round(width * 0.82);
+  const cy = Math.round(height * 0.855);
+  console.log(`[tapRightArrow] probe on ${width}x${height}, arrow~${cx},${cy}`);
+
+  const gone = async () =>
+    !(await byText("ENGLISH")
+      .isDisplayed()
+      .catch(() => false));
+
+  type Attempt = { name: string; run: () => Promise<void> };
+  const attempts: Attempt[] = [
+    { name: "clickGesture@center", run: () => clickGestureAt(cx, cy) },
+    { name: "w3cTap@center", run: () => w3cTap(cx, cy) },
+    { name: "w3cLongPress@center", run: () => w3cTap(cx, cy, 350) },
+    { name: "clickGesture@lower", run: () => clickGestureAt(cx, Math.round(height * 0.9)) },
+    { name: "w3cTap@lower", run: () => w3cTap(cx, Math.round(height * 0.9)) },
+    { name: "w3cTap@shifted", run: () => w3cTap(Math.round(width * 0.84), Math.round(height * 0.86)) },
+  ];
+  for (const a of attempts) {
+    try {
+      await a.run();
+    } catch (e) {
+      console.log(`[tapRightArrow] ${a.name} threw ${(e as Error)?.message || e}`);
+      continue;
+    }
+    await browser.pause(700);
+    if (await gone()) {
+      console.log(`[tapRightArrow] SUCCESS via ${a.name}`);
+      return;
+    }
+    console.log(`[tapRightArrow] ${a.name} did not navigate`);
+  }
+  console.log("[tapRightArrow] all tap variants failed");
+}
+
+// Raw UiAutomator2 clickGesture at a coordinate (no fallback), for the probe.
+async function clickGestureAt(x: number, y: number): Promise<void> {
+  await browser.execute("mobile: clickGesture", { x: Math.round(x), y: Math.round(y) });
 }
 
 // A W3C pointer-touch tap: press, brief hold, release. Injects a real MotionEvent
 // sequence, which Compose's detectTapGestures requires (mobile: clickGesture does
 // not always fire it). Prefer this for gesture-detector controls.
-export async function w3cTap(x: number, y: number): Promise<void> {
+export async function w3cTap(x: number, y: number, holdMs = 120): Promise<void> {
   await browser
     .action("pointer", { parameters: { pointerType: "touch" } })
     .move({ duration: 0, x: Math.round(x), y: Math.round(y) })
     .down({ button: 0 })
-    .pause(120)
+    .pause(holdMs)
     .up({ button: 0 })
     .perform();
 }
