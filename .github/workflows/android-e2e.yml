@@ -103,6 +103,10 @@ jobs:
           APP_PACKAGE: org.greenstand.android.TreeTracker.debug
           DEVICE_NAME: emulator-5554
           CAPTURE_ARTIFACTS: "1"
+          # TEMPORARY (testTag probe): dump the full UiAutomator2 hierarchy after
+          # every step so the CI log shows each tagged control's resource-id and
+          # the exact format (raw tag vs <pkg>:id/<tag>). Remove after Phase 4.
+          E2E_DUMP_ALL: "1"
         with:
           api-level: 30
           target: google_apis
