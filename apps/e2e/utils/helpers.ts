@@ -1,4 +1,4 @@
-import { $, browser } from "@wdio/globals";
+import { $, $$, browser } from "@wdio/globals";
 
 // Must match the wdio cap `appium:appPackage`. Read from env so the suite can
 // target any build (local/dev/prod) without code changes.
@@ -117,14 +117,54 @@ export async function tapRightArrow(): Promise<void> {
   } catch {
     // fall through to the coordinate tap
   }
-  // Fallback: the forward ArrowButton lives in the bottom ActionBar's right slot,
-  // and at the current app commit its Image sets contentDescription=null, so it has
-  // no queryable semantics (no text, no description, no resource-id). Tap it by
-  // position relative to the real window size (density/resolution independent). The
-  // button is ~62dp, so the target has ample margin around this point.
+  // Fallback: the forward ArrowButton has contentDescription=null at the current
+  // app commit, so it has no description/text/resource-id to query. But it IS the
+  // one control the framework exposes as clickable=true in the accessibility tree
+  // (the Compose language/text controls report clickable=false). Locate that node
+  // and tap the centre of its real bounds, rather than guessing a screen fraction.
+  // The arrow sits in the bottom ActionBar's right slot, so among clickable nodes
+  // pick the bottom-right one.
   const { width, height } = await browser.getWindowSize();
-  console.log(`[tapRightArrow] window=${width}x${height} -> tap ${Math.round(width * 0.82)},${Math.round(height * 0.855)}`);
+  const target = await bottomRightClickableCentre(width, height);
+  if (target) {
+    console.log(`[tapRightArrow] clickable arrow centre ${target.x},${target.y}`);
+    await tapAt(target.x, target.y);
+    return;
+  }
+  // Last resort: no clickable node found; fall back to the positional estimate.
+  console.log(
+    `[tapRightArrow] no clickable node; window=${width}x${height} -> tap ${Math.round(width * 0.82)},${Math.round(height * 0.855)}`,
+  );
   await tapAt(Math.round(width * 0.82), Math.round(height * 0.855));
+}
+
+// Parse a UiAutomator2 bounds string "[x1,y1][x2,y2]" into its centre point.
+function boundsCentre(bounds: string): { x: number; y: number } | null {
+  const m = bounds.match(/\[(\d+),(\d+)\]\[(\d+),(\d+)\]/);
+  if (!m) return null;
+  const [x1, y1, x2, y2] = [+m[1], +m[2], +m[3], +m[4]];
+  return { x: Math.round((x1 + x2) / 2), y: Math.round((y1 + y2) / 2) };
+}
+
+// Find the bottom-right-most clickable node's centre. The forward arrow is the
+// sole clickable control in the bottom ActionBar's right slot, so restricting to
+// the bottom-right region and taking the right-most match isolates it even when a
+// screen has other clickable controls (e.g. a text field on the credential step).
+async function bottomRightClickableCentre(
+  width: number,
+  height: number,
+): Promise<{ x: number; y: number } | null> {
+  const els = await $$('android=new UiSelector().clickable(true)');
+  let best: { x: number; y: number } | null = null;
+  for (const el of els) {
+    const bounds = await el.getAttribute("bounds").catch(() => null);
+    if (!bounds) continue;
+    const c = boundsCentre(bounds);
+    if (!c) continue;
+    if (c.x < width * 0.55 || c.y < height * 0.7) continue; // bottom-right region only
+    if (!best || c.x > best.x) best = c;
+  }
+  return best;
 }
 
 /**
