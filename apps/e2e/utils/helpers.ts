@@ -39,13 +39,25 @@ export const byClass = (className: string, index = 0) =>
 // ─── Coordinate Tap ───────────────────────────────────────────────────────────
 
 export async function tapAt(x: number, y: number): Promise<void> {
-  await browser
-    .action("pointer", { parameters: { pointerType: "touch" } })
-    .move({ duration: 0, x, y })
-    .down({ button: 0 })
-    .pause(100)
-    .up({ button: 0 })
-    .perform();
+  const px = Math.round(x);
+  const py = Math.round(y);
+  // Prefer UiAutomator2's native click gesture. A raw W3C pointer action can land
+  // on the right pixel without triggering a Compose button's onClick (observed on
+  // this driver: an on-target tap on the forward arrow produced no navigation);
+  // clickGesture dispatches a real click and is reliable across Compose controls.
+  try {
+    await browser.execute("mobile: clickGesture", { x: px, y: py });
+    return;
+  } catch {
+    // Fallback for drivers without clickGesture.
+    await browser
+      .action("pointer", { parameters: { pointerType: "touch" } })
+      .move({ duration: 0, x: px, y: py })
+      .down({ button: 0 })
+      .pause(100)
+      .up({ button: 0 })
+      .perform();
+  }
 }
 
 // ─── Wait Helpers ─────────────────────────────────────────────────────────────
