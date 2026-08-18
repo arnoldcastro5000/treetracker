@@ -10,6 +10,7 @@ import {
   tapText,
   tapDesc,
   tapRightArrow,
+  acceptPrivacyPolicy,
   tapSettingsIcon,
   tapFirstListItem,
   tapFirstListItemAndAdvance,
@@ -128,7 +129,7 @@ When("I select the first wallet and advance", async () => {
 });
 
 When("I accept the privacy policy", async () => {
-  await tapDesc("Accept Privacy Policy", 15000);
+  await acceptPrivacyPolicy();
 });
 
 When("I enter phone number {string}", async (phone: string) => {
