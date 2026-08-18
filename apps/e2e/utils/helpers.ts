@@ -129,39 +129,75 @@ export async function tapRightArrow(): Promise<void> {
     // fall through to the coordinate tap
   }
   // The forward ArrowButton is a TreeTrackerButton (pointerInput +
-  // detectTapGestures, not Modifier.clickable), so it exposes no clickable /
-  // resource-id / description node and is reachable only by coordinate: the
-  // ActionBar right-third centre, ~0.82w x 0.855h (886,2001 on 1080x2340).
-  // Its onTap fires via mobile: clickGesture, but only once the enable state and
-  // its tween have settled after a language is selected; a tap sent immediately
-  // is dropped (confirmed across CI runs). Settle first, then clickGesture.
-  await browser.pause(700);
-  await clickGestureFraction(0.82, 0.855, "tapRightArrow");
-}
-
-// Tap a screen-fraction point via UiAutomator2 clickGesture. clickGesture is the
-// method that reliably fires this app's Compose detectTapGestures onClick (a raw
-// W3C pointer tap does not), for controls with no queryable node.
-export async function clickGestureFraction(
-  xFrac: number,
-  yFrac: number,
-  label = "clickGesture",
-): Promise<void> {
-  const { width, height } = await browser.getWindowSize();
-  const x = Math.round(width * xFrac);
-  const y = Math.round(height * yFrac);
-  console.log(`[${label}] clickGesture ${x},${y} on ${width}x${height}`);
-  await browser.execute("mobile: clickGesture", { x, y });
+  // detectTapGestures, not Modifier.clickable): no clickable / resource-id /
+  // description node, reachable only by coordinate at the ActionBar right-third
+  // centre, ~0.82w x 0.855h (886,2001 on 1080x2340). Its detectTapGestures also
+  // ignores a tap sent before the enable state/tween settles, and that settle is
+  // not a fixed delay, so tap-and-retry until the screen actually changes rather
+  // than guessing a single delay.
+  const before = await safeSource();
+  const changed = async () => (await safeSource()) !== before;
+  await tapFractionUntil(0.82, 0.855, changed, "tapRightArrow");
 }
 
 // Accept the Privacy Policy dialog. Its confirm control is an ApprovalButton
 // (TreeTrackerButton, contentDescription=null) centred horizontally at the
-// dialog's bottom, so it has no queryable node; tap it by coordinate.
+// dialog's bottom, so it has no queryable node; tap by coordinate and retry
+// until the dialog's "Privacy Policy" title is gone.
 export async function acceptPrivacyPolicy(): Promise<void> {
   await waitForVisible("Privacy Policy", 15000);
-  await browser.pause(500);
-  await clickGestureFraction(0.5, 0.905, "acceptPrivacyPolicy");
-  await browser.pause(800);
+  const gone = async () => !(await isVisible("Privacy Policy"));
+  await tapFractionUntil(0.5, 0.905, gone, "acceptPrivacyPolicy");
+}
+
+// Inject a real tap (MotionEvent) at a screen-fraction point via `input tap`,
+// retrying until `success` holds or the attempts are exhausted. This app's
+// Compose controls are pointerInput{detectTapGestures} with no queryable node,
+// and a tap can be dropped if sent before the control settles; a real input
+// event plus a success-gated retry is the robust way to drive them by coordinate.
+async function tapFractionUntil(
+  xFrac: number,
+  yFrac: number,
+  success: () => Promise<boolean>,
+  label = "tap",
+  tries = 5,
+): Promise<boolean> {
+  const { width, height } = await browser.getWindowSize();
+  const x = Math.round(width * xFrac);
+  const y = Math.round(height * yFrac);
+  for (let i = 0; i < tries; i++) {
+    await browser.pause(i === 0 ? 700 : 500);
+    await inputTap(x, y, label);
+    await browser.pause(700);
+    if (await success()) {
+      if (i > 0) console.log(`[${label}] succeeded on attempt ${i + 1}`);
+      return true;
+    }
+    console.log(`[${label}] attempt ${i + 1} had no effect, retrying`);
+  }
+  console.log(`[${label}] gave up after ${tries} attempts`);
+  return false;
+}
+
+// Inject a genuine tap via `adb shell input tap` (relaxedSecurity is enabled on
+// the Appium server). This dispatches a real MotionEvent through the input
+// system, which Compose's detectTapGestures handles like a finger, unlike
+// mobile: clickGesture / W3C pointer actions which do not reliably fire it here.
+async function inputTap(x: number, y: number, label = "inputTap"): Promise<void> {
+  console.log(`[${label}] input tap ${x},${y}`);
+  await browser.execute("mobile: shell", {
+    command: "input",
+    args: ["tap", String(x), String(y)],
+  });
+}
+
+// getPageSource() that never throws, for cheap before/after screen comparisons.
+async function safeSource(): Promise<string> {
+  try {
+    return await browser.getPageSource();
+  } catch {
+    return "";
+  }
 }
 
 // Parse a UiAutomator2 bounds string "[x1,y1][x2,y2]" into its centre point.
