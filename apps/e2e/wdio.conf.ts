@@ -87,8 +87,21 @@ export const config: any = {
     await beginScreenRecording();
   },
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  afterStep: async function (step: any) {
+  afterStep: async function (step: any, _scenario: any, result: any) {
     await saveStepScreenshot(step?.text || "step");
+    // On a step failure, dump the UI hierarchy to stdout so the CI log (always
+    // reachable) shows exactly what was on screen and the real element ids,
+    // without depending on downloading the screenshot artifact.
+    if (result && result.passed === false) {
+      try {
+        const src = await browser.getPageSource();
+        console.log(
+          `\n===== PAGE SOURCE ON FAILURE: ${step?.text || ""} =====\n${src}\n===== END PAGE SOURCE =====\n`,
+        );
+      } catch {
+        // best-effort
+      }
+    }
   },
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   afterScenario: async function (world: any) {
