@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { browser } from "@wdio/globals";
 import {
   beginScreenRecording,
   saveStepScreenshot,
