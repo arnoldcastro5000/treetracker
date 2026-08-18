@@ -1,0 +1,19 @@
+# Local (k3d) overlay for bulk-pack-transformer-v2.
+# Reuses the base (deployment + service, whose default env already points
+# TREETRACKER_FIELD_DATA_URL at http://treetracker-field-data.field-data-api). Just adds the
+# namespace, the locally-built image, and drops the DigitalOcean node-affinity.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: bulk-pack-services
+resources:
+  - ../../../bulk-pack-transformer-v2/deployment/base
+  - namespace.yaml
+images:
+  - name: greenstand/bulk-pack-transformer-v2
+    newName: bulk-pack-transformer-v2
+    newTag: local
+patches:
+  - target: { kind: Deployment, name: bulk-pack-transformer-v2 }
+    patch: |-
+      - op: remove
+        path: /spec/template/spec/affinity

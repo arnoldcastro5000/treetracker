@@ -1,0 +1,46 @@
+# Local CronJob for bulk-pack-processor. Mirrors the base spec but on batch/v1 (the base uses
+# batch/v1beta1, removed in modern k8s), with the local image, no DO node-affinity, no ArgoCD hooks.
+# Reads data_pipeline.bulk_tree_upload and routes v2 packs → bulk-pack-transformer-v2.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: bulk-pack-processor
+  namespace: bulk-pack-services
+  labels:
+    app: bulk-pack-processor
+spec:
+  # Every minute (local): field-data creates sessions ASYNC, so a capture POSTed right
+  # after its session 409s ("session … yet to be created") and is left processed=f; a
+  # fast cron retries it within the e2e /verify poll window (dev uses */5). Forbid stops overlap.
+  schedule: "* * * * *"
+  startingDeadlineSeconds: 200
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    metadata:
+      labels: { app: bulk-pack-processor }
+    spec:
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: bulk-pack-processor
+              image: bulk-pack-processor:local
+              imagePullPolicy: IfNotPresent
+              env:
+                - name: DATA_INPUT_DB_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: bulk-pack-database-connection
+                      key: db
+                - name: DATA_INPUT_SERVICE_URL
+                  value: "http://bulk-pack-transformer.bulk-pack-services/"       # v1 (not deployed; only for v1 packs)
+                - name: DATA_INPUT_SERVICE_URL_V2
+                  value: "http://bulk-pack-transformer-v2.bulk-pack-services/"     # v2 path (what the app uploads)
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: bulk-pack-database-connection
+  namespace: bulk-pack-services
+stringData:
+  db: "postgresql://postgres:postgres@postgres.data.svc.cluster.local:5432/data_pipeline"

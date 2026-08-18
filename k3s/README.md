@@ -8,8 +8,10 @@ clusters.
 ## Quick start (scripts)
 ```bash
 ./k3s/prepare.sh     # ONCE per machine (macOS-specific): install tools (k3d/helm/awscli/libpq).
+./k3s/prepare-linux.sh # ONCE per machine (Linux, incl. restricted-kernel sandboxes): install tools.
 ./k3s/up.sh          # portable, idempotent: bring up the whole stack. Re-run to repair/continue.
                      #   single step: ./k3s/up.sh gateway | field_data | treetracker_api | admin_client | ...
+./k3s/smoke.sh       # verify: 17-check in-cluster smoke test (health, gateway, auth, DB, capture flow).
 ./k3s/down.sh        # tear down: delete the k3d cluster (all pods + data).
                      #   ./k3s/down.sh --namespaces   (keep cluster, drop stack namespaces)
                      #   ./k3s/down.sh --images        (also remove built/pulled images)

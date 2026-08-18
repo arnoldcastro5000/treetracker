@@ -1,0 +1,6 @@
+# Local (k3d) overlay for bulk-pack-processor. Ships a batch/v1 CronJob (the base is the removed
+# batch/v1beta1) + a plain DB Secret; namespace bulk-pack-services (created by transformer-v2).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - cronjob.yaml
