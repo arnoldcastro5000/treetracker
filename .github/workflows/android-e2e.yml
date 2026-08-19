@@ -69,9 +69,9 @@ jobs:
           treetracker_client_secret=placeholder
           KEYS
 
-      - name: Build debug APK
+      - name: Build local APK
         working-directory: treetracker-android
-        run: ./gradlew :app:assembleDebug --no-daemon --stacktrace
+        run: ./gradlew :app:assembleLocal --no-daemon --stacktrace
 
       - name: Install e2e dependencies
         working-directory: apps/e2e
@@ -99,17 +99,13 @@ jobs:
       - name: Run E2E on emulator
         uses: reactivecircus/android-emulator-runner@v2
         env:
-          APK_PATH: ${{ github.workspace }}/treetracker-android/app/build/outputs/apk/debug/app-debug.apk
-          APP_PACKAGE: org.greenstand.android.TreeTracker.debug
+          APK_PATH: ${{ github.workspace }}/treetracker-android/app/build/outputs/apk/local/app-local.apk
+          APP_PACKAGE: org.greenstand.android.TreeTracker.local
           DEVICE_NAME: emulator-5554
           CAPTURE_ARTIFACTS: "1"
-          # TEMPORARY (testTag probe): dump the full UiAutomator2 hierarchy after
-          # every step so the CI log shows each tagged control's resource-id and
-          # the exact format (raw tag vs <pkg>:id/<tag>). Remove after Phase 4.
-          E2E_DUMP_ALL: "1"
-          # TEMPORARY (Phase 4 verify): fail hard if any control falls back to a
-          # coordinate/desc tap, asserting the suite runs entirely on resource-ids.
-          # Remove (or keep as an opt-in) once landed.
+          # Assert the id-based taps still hold on the local build (offline 02 does
+          # not touch S3, so this validates the local variant builds + installs +
+          # runs onboarding; the S3 path is exercised by the LocalStack backend test).
           E2E_STRICT_TAGS: "1"
         with:
           api-level: 30
