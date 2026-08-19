@@ -10,16 +10,19 @@ import {
   tapText,
   tapDesc,
   tapRightArrow,
+  tapBackArrow,
   acceptPrivacyPolicy,
   tapSettingsIcon,
   tapFirstListItem,
   tapFirstListItemAndAdvance,
   dismissSyncReminderIfPresent,
+  setFieldByTag,
   byTextContains,
   byClass,
   byDesc,
   APP_PACKAGE,
 } from "../../utils/helpers";
+import { Tags } from "../../utils/tags";
 import { verifyCaptureOnAdmin, stopChromedriver } from "../../utils/admin";
 
 // ─── Scenario state (cucumber World) ──────────────────────────────────────────
@@ -96,7 +99,7 @@ When("I tap the right arrow", async () => {
 });
 
 When("I tap the back arrow", async () => {
-  await tapDesc("Navigate back", 8000);
+  await tapBackArrow();
   await browser.pause(1000);
 });
 
@@ -133,9 +136,7 @@ When("I accept the privacy policy", async () => {
 });
 
 When("I enter phone number {string}", async (phone: string) => {
-  const field = await byClass("android.widget.EditText", 0);
-  await field.waitForDisplayed({ timeout: 8000 });
-  await field.setValue(phone);
+  await setFieldByTag(Tags.INPUT_PHONE, phone, 0);
   try { await browser.hideKeyboard(); } catch { /* not shown */ }
   await browser.pause(500);
 });
@@ -208,11 +209,8 @@ When("I enter organization {string}", async (orgName: string) => {
 });
 
 When("I enter name {string} {string}", async (first: string, last: string) => {
-  const firstField = await byClass("android.widget.EditText", 0);
-  await firstField.waitForDisplayed({ timeout: 8000 });
-  await firstField.setValue(first);
-  const lastField = await byClass("android.widget.EditText", 1);
-  await lastField.setValue(last);
+  await setFieldByTag(Tags.INPUT_FIRST_NAME, first, 0);
+  await setFieldByTag(Tags.INPUT_LAST_NAME, last, 1);
   try { await browser.hideKeyboard(); } catch { /* not shown */ }
   await browser.pause(500);
 });
