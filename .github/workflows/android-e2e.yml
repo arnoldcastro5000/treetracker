@@ -107,6 +107,10 @@ jobs:
           # every step so the CI log shows each tagged control's resource-id and
           # the exact format (raw tag vs <pkg>:id/<tag>). Remove after Phase 4.
           E2E_DUMP_ALL: "1"
+          # TEMPORARY (Phase 4 verify): fail hard if any control falls back to a
+          # coordinate/desc tap, asserting the suite runs entirely on resource-ids.
+          # Remove (or keep as an opt-in) once landed.
+          E2E_STRICT_TAGS: "1"
         with:
           api-level: 30
           target: google_apis
