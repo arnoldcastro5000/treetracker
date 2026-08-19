@@ -1,5 +1,6 @@
 import { $, browser } from "@wdio/globals";
 import { Tags, byTag, languageOption } from "./tags";
+import { perfTapAttempts, perfFallback } from "./perf";
 
 // Must match the wdio cap `appium:appPackage`. Read from env so the suite can
 // target any build (local/dev/prod) without code changes.
@@ -86,6 +87,7 @@ const STRICT_TAGS = !!process.env.E2E_STRICT_TAGS;
 function tagFallback(label: string, tag: string): void {
   const msg = `[tags] FALLBACK for ${label}: resource-id "${tag}" not usable, using coordinate/desc path`;
   console.log(msg);
+  perfFallback(label);
   if (STRICT_TAGS) {
     throw new Error(`${msg} (E2E_STRICT_TAGS set: tagged automation is required)`);
   }
@@ -130,12 +132,14 @@ async function tapTagUntil(
     await browser.pause(500);
     if (await success()) {
       if (i > 0) console.log(`[${label}] tag tap succeeded on attempt ${i + 1}`);
+      perfTapAttempts(label, i + 1);
       return true;
     }
     await inputTap(c.x, c.y, label);
     await browser.pause(500);
     if (await success()) {
       if (i > 0) console.log(`[${label}] tag tap (input) succeeded on attempt ${i + 1}`);
+      perfTapAttempts(label, i + 1);
       return true;
     }
     console.log(`[${label}] tag tap attempt ${i + 1} had no effect, retrying`);
