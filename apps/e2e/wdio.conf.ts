@@ -5,6 +5,13 @@ import {
   saveStepScreenshot,
   endScreenRecording,
 } from "./utils/artifacts";
+import {
+  perfBeginScenario,
+  perfResetDevice,
+  perfBeginStep,
+  perfEndStep,
+  perfEndScenario,
+} from "./utils/perf";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const config: any = {
@@ -84,11 +91,18 @@ export const config: any = {
   // fails a test. Env-neutral: identical behavior locally and in CI, and a
   // driver without screen recording degrades silently. See utils/artifacts.ts.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  beforeScenario: async function () {
+  beforeScenario: async function (world: any) {
+    perfBeginScenario(world?.pickle?.name || "scenario");
+    await perfResetDevice();
     await beginScreenRecording();
   },
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  beforeStep: function () {
+    perfBeginStep();
+  },
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   afterStep: async function (step: any, _scenario: any, result: any) {
+    perfEndStep(step?.text || "", result?.passed !== false);
     await saveStepScreenshot(step?.text || "step");
     // On a step failure, dump the UI hierarchy to stdout so the CI log (always
     // reachable) shows exactly what was on screen and the real element ids,
@@ -114,6 +128,7 @@ export const config: any = {
   },
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   afterScenario: async function (world: any) {
+    await perfEndScenario();
     await endScreenRecording(world?.pickle?.name || "scenario");
   },
 };

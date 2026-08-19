@@ -1,4 +1,6 @@
 import { $, browser } from "@wdio/globals";
+import { Tags, byTag, languageOption } from "./tags";
+import { perfTapAttempts, perfFallback } from "./perf";
 
 // Must match the wdio cap `appium:appPackage`. Read from env so the suite can
 // target any build (local/dev/prod) without code changes.
@@ -64,6 +66,114 @@ export async function tapAt(x: number, y: number): Promise<void> {
   }
 }
 
+// ─── testTag (resource-id) Tap Layer ──────────────────────────────────────────
+// The app enables testTagsAsResourceId at each Activity root (the automation-ids
+// work, Phases 0-3), so every Modifier.testTag(...) surfaces to UiAutomator2 as a
+// raw resource-id (confirmed in CI: resource-id="nav-forward", no package prefix).
+// Locating a control by its id is resolution- and layout-independent, unlike the
+// pixel-fraction taps further down, which this layer supersedes. The tap itself
+// still routes through tapAt (clickGesture then a real input tap) at the tagged
+// node's bounds centre, the mechanism proven to fire this app's Compose
+// pointerInput{detectTapGestures} controls (a plain element.click can miss them).
+//
+// Every migrated helper is tag-FIRST with the old coordinate/desc path kept as a
+// fallback, so a build without tags (or an ad-hoc local run) still works. When the
+// fallback fires it logs loudly; set E2E_STRICT_TAGS=1 to make that a hard failure,
+// which CI uses to assert the suite runs on ids and never silently drifts back to
+// coordinate taps.
+
+const STRICT_TAGS = !!process.env.E2E_STRICT_TAGS;
+
+function tagFallback(label: string, tag: string): void {
+  const msg = `[tags] FALLBACK for ${label}: resource-id "${tag}" not usable, using coordinate/desc path`;
+  console.log(msg);
+  perfFallback(label);
+  if (STRICT_TAGS) {
+    throw new Error(`${msg} (E2E_STRICT_TAGS set: tagged automation is required)`);
+  }
+}
+
+// Tap the centre of a tagged node once, via the proven tapAt mechanism. Returns
+// false immediately if the node is absent, so probing for an optional tag (e.g. a
+// language row) costs nothing and the caller can fall through.
+async function tapTag(tag: string): Promise<boolean> {
+  const el = await byTag(tag);
+  if (!(await el.isDisplayed().catch(() => false))) return false;
+  const bounds = await el.getAttribute("bounds").catch(() => null);
+  const c = bounds ? boundsCentre(bounds) : null;
+  if (!c) return false;
+  await tapAt(c.x, c.y);
+  return true;
+}
+
+// Tap a tagged node and retry until `success` holds, re-reading the node each
+// attempt. Mirrors tapFractionUntil but locates by id instead of a screen fraction.
+// Returns false if the tag is absent from the start (caller falls back to
+// coordinates); a tag that disappears after a tap is treated as a successful
+// navigation (verified via `success`).
+async function tapTagUntil(
+  tag: string,
+  success: () => Promise<boolean>,
+  label = "tapTag",
+  tries = 5,
+): Promise<boolean> {
+  for (let i = 0; i < tries; i++) {
+    const el = await byTag(tag);
+    const shown = await el.isDisplayed().catch(() => false);
+    if (!shown) {
+      if (i === 0) return false;      // tag was never present -> fall back
+      return await success();         // gone after a tap -> did it navigate?
+    }
+    const bounds = await el.getAttribute("bounds").catch(() => null);
+    const c = bounds ? boundsCentre(bounds) : null;
+    if (!c) return i === 0 ? false : await success();
+    await browser.pause(i === 0 ? 400 : 300);
+    await browser.execute("mobile: clickGesture", { x: c.x, y: c.y }).catch(() => {});
+    await browser.pause(500);
+    if (await success()) {
+      if (i > 0) console.log(`[${label}] tag tap succeeded on attempt ${i + 1}`);
+      perfTapAttempts(label, i + 1);
+      return true;
+    }
+    await inputTap(c.x, c.y, label);
+    await browser.pause(500);
+    if (await success()) {
+      if (i > 0) console.log(`[${label}] tag tap (input) succeeded on attempt ${i + 1}`);
+      perfTapAttempts(label, i + 1);
+      return true;
+    }
+    console.log(`[${label}] tag tap attempt ${i + 1} had no effect, retrying`);
+  }
+  return false;
+}
+
+// Set a text field located by its stable id, falling back to the positional
+// EditText selector (fragile: breaks if field order changes) when the tag is
+// absent.
+export async function setFieldByTag(
+  tag: string,
+  value: string,
+  fallbackIndex = 0,
+  timeout = 8000,
+): Promise<void> {
+  const tagged = await byTag(tag);
+  if (await tagged.isDisplayed().catch(() => false)) {
+    await tagged.setValue(value);
+    return;
+  }
+  try {
+    await tagged.waitForDisplayed({ timeout: 1500 });
+    await tagged.setValue(value);
+    return;
+  } catch {
+    // fall through to the positional fallback
+  }
+  tagFallback(`field:${tag}`, tag);
+  const field = await byClass("android.widget.EditText", fallbackIndex);
+  await field.waitForDisplayed({ timeout });
+  await field.setValue(value);
+}
+
 // ─── Wait Helpers ─────────────────────────────────────────────────────────────
 
 export async function waitForVisible(text: string, timeout = 20000): Promise<void> {
@@ -97,6 +207,10 @@ export async function tapText(text: string, timeout = 10000): Promise<void> {
   // as interactive and the button's onClick never fires. Tap the centre of the
   // element's real bounds by coordinate instead, which reaches the Compose
   // pointerInput handler underneath.
+  // Language rows carry a stable id (language-option-<name>); prefer it when the
+  // tapped text is a language option. Not every tapText target is tagged (TRACK,
+  // UPLOAD, NOTE are plain screen text), so a miss here is expected, not a fallback.
+  if (await tapTag(languageOption(text))) return;
   const bounds = await el.getAttribute("bounds").catch(() => null);
   const c = bounds ? boundsCentre(bounds) : null;
   if (c) {
@@ -117,8 +231,13 @@ export async function tapSettingsIcon(): Promise<void> {
 }
 
 export async function tapRightArrow(): Promise<void> {
-  // Preferred: content-description, present on app versions that label the arrow.
-  // Quick, non-blocking check so we don't wait the full timeout when it is absent.
+  const before = await safeSource();
+  const changed = async () => (await safeSource()) !== before;
+  // Tag-first: the forward ArrowButton now carries testTag "nav-forward".
+  if (await tapTagUntil(Tags.NAV_FORWARD, changed, "tapRightArrow")) return;
+  tagFallback("tapRightArrow", Tags.NAV_FORWARD);
+  // Preferred fallback: content-description, present on app versions that label
+  // the arrow. Quick, non-blocking check so we don't wait the full timeout.
   try {
     const btn = await byDesc("Navigate forward");
     if (await btn.isDisplayed().catch(() => false)) {
@@ -128,16 +247,22 @@ export async function tapRightArrow(): Promise<void> {
   } catch {
     // fall through to the coordinate tap
   }
-  // The forward ArrowButton is a TreeTrackerButton (pointerInput +
-  // detectTapGestures, not Modifier.clickable): no clickable / resource-id /
-  // description node, reachable only by coordinate. Its VISUAL centre is ~0.82w x
-  // 0.855h, but the language/credential screens draw a full-height content layer
-  // that intercepts a tap there; the arrow only receives taps a little lower, at
-  // ~0.82w x 0.88h (886,2059 on 1080x2340), pinned by a coordinate sweep in CI.
-  // Tap there and retry until the screen actually changes.
+  // Last resort: the arrow's VISUAL centre is ~0.82w x 0.855h, but the
+  // language/credential screens draw a full-height content layer that intercepts a
+  // tap there; the arrow only receives taps a little lower, at ~0.82w x 0.88h
+  // (886,2059 on 1080x2340), pinned by a coordinate sweep in CI.
+  await tapFractionUntil(0.82, 0.88, changed, "tapRightArrow");
+}
+
+export async function tapBackArrow(): Promise<void> {
   const before = await safeSource();
   const changed = async () => (await safeSource()) !== before;
-  await tapFractionUntil(0.82, 0.88, changed, "tapRightArrow");
+  // Tag-first: the back ArrowButton carries testTag "nav-back".
+  if (await tapTagUntil(Tags.NAV_BACK, changed, "tapBackArrow")) return;
+  tagFallback("tapBackArrow", Tags.NAV_BACK);
+  const btn = await byDesc("Navigate back");
+  await btn.waitForDisplayed({ timeout: 8000 });
+  await btn.click();
 }
 
 // Accept the Privacy Policy dialog. Its confirm control is an ApprovalButton
@@ -147,6 +272,9 @@ export async function tapRightArrow(): Promise<void> {
 export async function acceptPrivacyPolicy(): Promise<void> {
   await waitForVisible("Privacy Policy", 15000);
   const gone = async () => !(await isVisible("Privacy Policy"));
+  // Tag-first: the accept control is an ApprovalButton, tagged "approve".
+  if (await tapTagUntil(Tags.APPROVE, gone, "acceptPrivacyPolicy")) return;
+  tagFallback("acceptPrivacyPolicy", Tags.APPROVE);
   await tapFractionUntil(0.5, 0.905, gone, "acceptPrivacyPolicy");
 }
 
@@ -347,7 +475,11 @@ export async function ensureOnDashboard(): Promise<void> {
 
   // ── Privacy Policy Dialog ────────────────────────────────────────────────
   if (await isVisibleWithTimeout("Privacy Policy", 6000)) {
-    await tapAt(540, 1800);
+    const gone = async () => !(await isVisible("Privacy Policy"));
+    if (!(await tapTagUntil(Tags.APPROVE, gone, "ensureOnDashboard:privacy"))) {
+      tagFallback("ensureOnDashboard:privacy", Tags.APPROVE);
+      await tapAt(540, 1800);
+    }
     await browser.pause(1000);
   }
 
@@ -386,11 +518,17 @@ export async function ensureOnDashboard(): Promise<void> {
   // dismiss control is a checkmark (TreeTrackerButton, contentDescription=null)
   // at the dialog's bottom-centre. Tap by coordinate until the tutorial is gone.
   if (await isVisibleWithTimeout("Click on", 8000)) {
-    // The tutorial is a Material AlertDialog centred on screen (bounds seen at
-    // ~[100,635][980,1717]); its dismiss checkmark sits at the dialog's
-    // bottom-centre, ~0.5w x 0.69h, NOT at the screen bottom.
     const dismissed = async () => !(await isVisible("Click on"));
-    await tapFractionUntil(0.5, 0.69, dismissed, "dismissSelfieTutorial");
+    // Tag-first: the real dismiss control is scoped "tutorial-dismiss" (the selfie
+    // tutorial also renders demo ApprovalButtons, so the plain "approve" id collides
+    // there, hence a dedicated tag).
+    if (!(await tapTagUntil(Tags.TUTORIAL_DISMISS, dismissed, "dismissSelfieTutorial"))) {
+      tagFallback("dismissSelfieTutorial", Tags.TUTORIAL_DISMISS);
+      // Fallback: the tutorial is a Material AlertDialog centred on screen (bounds
+      // ~[100,635][980,1717]); its dismiss checkmark sits at the dialog's
+      // bottom-centre, ~0.5w x 0.69h, NOT at the screen bottom.
+      await tapFractionUntil(0.5, 0.69, dismissed, "dismissSelfieTutorial");
+    }
   }
 
   // ── Selfie Screen ────────────────────────────────────────────────────────
@@ -401,7 +539,11 @@ export async function ensureOnDashboard(): Promise<void> {
     const beforeCapture = await safeSource();
     const captured = async () =>
       (await isVisible("UPLOAD")) || (await safeSource()) !== beforeCapture;
-    await tapFractionUntil(0.5, 0.88, captured, "takeSelfie");
+    // Tag-first: the selfie CaptureButton carries testTag "capture-selfie".
+    if (!(await tapTagUntil(Tags.CAPTURE_SELFIE, captured, "takeSelfie"))) {
+      tagFallback("takeSelfie", Tags.CAPTURE_SELFIE);
+      await tapFractionUntil(0.5, 0.88, captured, "takeSelfie");
+    }
     await browser.pause(1500);
   }
 
@@ -410,7 +552,11 @@ export async function ensureOnDashboard(): Promise<void> {
   // approval (right) button sits at ~0.6w x 0.9h. Retry until the dashboard shows.
   if (!(await isVisible("UPLOAD"))) {
     const onDashboard = async () => await isVisible("UPLOAD");
-    await tapFractionUntil(0.6, 0.9, onDashboard, "approveSelfie");
+    // Tag-first: the review approve control is an ApprovalButton, tagged "approve".
+    if (!(await tapTagUntil(Tags.APPROVE, onDashboard, "approveSelfie"))) {
+      tagFallback("approveSelfie", Tags.APPROVE);
+      await tapFractionUntil(0.6, 0.9, onDashboard, "approveSelfie");
+    }
   }
 
   await waitForVisible("UPLOAD", 30000);
