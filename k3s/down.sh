@@ -1,30 +1,22 @@
 #!/usr/bin/env bash
 #
-# down.sh — tear down the local Greenstand backend.
+# down.sh - tear down the local Greenstand environment. Adapter-aware: the namespaces, images
+# and down hooks come from the same k3s/services/*/standalone.yaml adapters up.sh discovers,
+# processed in REVERSE dependency order, so teardown stays symmetric with stand-up and never
+# needs editing when a subsystem is added.
 #
-# Default (local): delete the whole k3d cluster — removes all pods, namespaces AND Postgres data.
+# Default (local): delete the whole k3d cluster - removes all pods, namespaces AND Postgres data -
+# then run every adapter's down hook (e.g. remove the host-side LocalStack container).
 # Flags:
-#   --namespaces   only delete the stack's namespaces (keep the cluster + its data)
-#   --images       also remove the locally built/pulled images from the host Docker
+#   --namespaces   only delete the adapters' namespaces (keep the cluster + its data; skips hooks)
+#   --images       also remove the adapters' built/pulled images from the host Docker
 #
-# Does NOT touch: the online dev DB, the AWS `treetracker-local-*` resources, or your host tools.
+# Does NOT touch: any real cluster, real AWS resources, or your host tools.
 #
 # Env: ENV=local (default) uses k3d; ENV=ci deletes only the namespaces on $KUBE_CONTEXT.
 #
 set -euo pipefail
-
-ENV="${ENV:-local}"
-CLUSTER="${CLUSTER:-greenstand}"
-CONTEXT="${KUBE_CONTEXT:-k3d-$CLUSTER}"
-NAMESPACES=(admin-client admin-api bulk-pack-services treetracker-api images-api field-data-api rabbitmq data emissary emissary-system)
-
-# Homebrew paths are macOS-only; guard so Linux does not prepend a nonexistent dir.
-[ "$(uname)" = Darwin ] && export PATH="/opt/homebrew/bin:$PATH"
-export NO_PROXY="0.0.0.0,127.0.0.1,localhost,::1,.svc,.cluster.local"
-export no_proxy="$NO_PROXY"
-c_grn=$'\033[32m'; c_red=$'\033[31m'; c_off=$'\033[0m'
-log(){ echo "${c_grn}▶${c_off} $*"; }
-die(){ echo "${c_red}✖ $*${c_off}" >&2; exit 1; }
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")/lib" && pwd)/orchestrator-lib.sh"
 
 MODE="cluster"; CLEAN_IMAGES=0
 for a in "$@"; do case "$a" in
@@ -32,6 +24,23 @@ for a in "$@"; do case "$a" in
   --images)     CLEAN_IMAGES=1 ;;
   *) die "unknown flag '$a' (use --namespaces and/or --images)" ;;
 esac; done
+
+command -v yq >/dev/null 2>&1 || die "yq missing - run ./k3s/prepare.sh (or ./k3s/prepare-linux.sh)"
+
+# ── Adapter discovery (reverse order) ────────────────────────────────────────
+# Namespaces, images and down hooks, gathered from every adapter. Order does not matter for
+# namespace deletion (async) or image removal; down hooks run after the cluster is gone.
+NAMESPACES=""
+IMAGES=""
+DOWN_HOOKS=""
+for f in "$ADAPTERS_DIR"/*/standalone.yaml; do
+  [ -f "$f" ] || continue
+  NAMESPACES="$NAMESPACES $(yq -r '(.namespaces // []) | join(" ")' "$f")"
+  IMAGES="$IMAGES $(yq -r '(.images // []) | map(.pull // (.name + ":local")) | join(" ")' "$f")"
+  h=$(yq -r '.hooks.down // ""' "$f")
+  [ -n "$h" ] && DOWN_HOOKS="$DOWN_HOOKS $h"
+done
+[ -n "$(echo $NAMESPACES)" ] || die "no adapters found under $ADAPTERS_DIR (*/standalone.yaml)"
 
 # kill any lingering host-side port-forwards
 pkill -f "port-forward svc/postgres" 2>/dev/null || true
@@ -43,8 +52,17 @@ delete_namespaces() {
     k3d-*) : ;;
     *) [ "$ENV" = ci ] || die "refusing to delete namespaces on non-k3d context '$CONTEXT' (set ENV=ci to override)";;
   esac
-  log "deleting namespaces on $CONTEXT: ${NAMESPACES[*]}"
-  kubectl --context "$CONTEXT" delete ns "${NAMESPACES[@]}" --ignore-not-found --wait=false 2>&1 | sed 's/^/  /' || true
+  log "deleting namespaces on $CONTEXT:$NAMESPACES"
+  # shellcheck disable=SC2086
+  kubectl --context "$CONTEXT" delete ns $NAMESPACES --ignore-not-found --wait=false 2>&1 | sed 's/^/  /' || true
+}
+
+run_down_hooks() {
+  local h script
+  for h in $DOWN_HOOKS; do
+    script="$(abs_path "$h")"
+    [ -f "$script" ] && bash "$script" || warn "down hook failed (non-fatal): $h"
+  done
 }
 
 if [ "$MODE" = namespaces ]; then
@@ -56,13 +74,15 @@ elif [ "$ENV" = local ]; then
   else
     log "k3d cluster '$CLUSTER' not present"
   fi
+  run_down_hooks
 else
   delete_namespaces   # ci with an existing (shared) cluster: only remove our namespaces
 fi
 
 if [ "$CLEAN_IMAGES" = 1 ]; then
-  log "removing local images"
-  docker rmi -f treetracker-field-data:local treetracker-api:local images-api:local bulk-pack-transformer-v2:local bulk-pack-processor:local bulk-pack-consumer:local treetracker-admin-api:local treetracker-admin-client:local postgis/postgis:15-3.4 rabbitmq:3.13-management-alpine 2>/dev/null || true
+  log "removing local images:$IMAGES"
+  # shellcheck disable=SC2086
+  docker rmi -f $IMAGES 2>/dev/null || true
 fi
 
 log "down complete"

@@ -1,0 +1,97 @@
+# Stand-up adapter: the capture -> verify pipeline (Android capture upload through to the admin
+# /verify UI). One subsystem = one adapter: the sibling k3s/services/<service> dirs stay plain
+# kustomize overlays; this adapter's overlay aggregates them, and only dirs with a standalone.yaml
+# are discovered as adapters.
+name: capture
+dependsOn: [postgres, gateway, rabbitmq, localstack]
+namespaces:
+  - field-data-api
+  - treetracker-api
+  - images-api
+  - bulk-pack-services
+  - admin-api
+  - admin-client
+# Databases on the shared Postgres. `treetracker` is also the instance's POSTGRES_DB; declaring
+# it keeps the adapter self-describing and the ensure step is idempotent.
+databases: [treetracker, data_pipeline]
+images:
+  - name: treetracker-field-data
+    context: treetracker-field-data
+  - name: treetracker-api
+    context: treetracker-api
+  - name: images-api
+    context: images-api
+  - name: bulk-pack-transformer-v2
+    context: bulk-pack-transformer-v2
+  - name: bulk-pack-transformer
+    context: bulk-pack-transformer
+    dockerfile: k3s/services/bulk-pack-transformer/Dockerfile
+  - name: bulk-pack-processor
+    context: bulk-pack-processor
+  - name: bulk-pack-consumer
+    context: bulk-pack-consumer
+    dockerfile: k3s/services/bulk-pack-consumer/Dockerfile
+  - name: treetracker-admin-api
+    context: treetracker-admin-api
+  - name: treetracker-admin-client
+    context: treetracker-admin-client
+    dockerfile: k3s/services/treetracker-admin-client/Dockerfile
+    extraContexts:
+      localdeploy: k3s/services/treetracker-admin-client
+# Dummy-literal secrets (never real creds). ${VAR} placeholders expand from the orchestrator's
+# config (single source of truth for ports/regions/names). LocalStack accepts any credentials.
+secrets:
+  - namespace: bulk-pack-services
+    name: treetracker-database-connection
+    literals:
+      db: postgresql://postgres:postgres@postgres.data.svc.cluster.local:5432/treetracker
+  - namespace: bulk-pack-services
+    name: bulk-pack-database-connection
+    literals:
+      db: postgresql://postgres:postgres@postgres.data.svc.cluster.local:5432/data_pipeline
+  - namespace: bulk-pack-services
+    name: sqs-url
+    literals:
+      sqsUrl: http://host.k3d.internal:${LOCALSTACK_PORT}/000000000000/${UPLOAD_QUEUE}
+  - namespace: bulk-pack-services
+    name: aws-key-id
+    literals:
+      accessKeyId: test
+  - namespace: bulk-pack-services
+    name: aws-key
+    literals:
+      secretAccessKey: test
+  - namespace: bulk-pack-services
+    name: localstack-endpoint
+    literals:
+      endpoint: http://host.k3d.internal:${LOCALSTACK_PORT}
+      region: ${OBJECT_STORAGE_REGION}
+# Object storage this subsystem needs (provisioned idempotently on the shared LocalStack, all
+# in OBJECT_STORAGE_REGION, before this adapter's services start).
+objectStorage:
+  buckets:
+    - ${BATCH_UPLOADS_BUCKET}
+    - ${IMAGES_BUCKET}
+  queues:
+    - ${UPLOAD_QUEUE}
+  notifications:
+    - bucket: ${BATCH_UPLOADS_BUCKET}
+      queue: ${UPLOAD_QUEUE}
+      events: ["s3:ObjectCreated:*"]
+overlay: k3s/services/capture
+waitFor:
+  # image ties each Deployment to its build, so a --rebuild rolls exactly the deployments whose
+  # image changed. bulk-pack-processor is a CronJob (no rollout to wait on): its next scheduled
+  # Job pulls the current :local image from containerd.
+  - { namespace: field-data-api,     deployment: treetracker-field-data,   image: treetracker-field-data:local }
+  - { namespace: treetracker-api,    deployment: treetracker-api,          image: treetracker-api:local }
+  - { namespace: images-api,         deployment: images-api,               image: images-api:local }
+  - { namespace: bulk-pack-services, deployment: bulk-pack-transformer-v2, image: bulk-pack-transformer-v2:local }
+  - { namespace: bulk-pack-services, deployment: bulk-pack-transformer,    image: bulk-pack-transformer:local }
+  - { namespace: bulk-pack-services, deployment: bulk-pack-consumer,       image: bulk-pack-consumer:local }
+  - { namespace: admin-api,          deployment: treetracker-admin-api,    image: treetracker-admin-api:local }
+  - { namespace: admin-client,       deployment: treetracker-admin-client, image: treetracker-admin-client:local }
+hooks:
+  pre: k3s/services/capture/hooks/migrate.sh
+  post: k3s/services/capture/hooks/seed-admin.sh
+verify: k3s/smoke.sh

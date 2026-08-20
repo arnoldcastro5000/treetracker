@@ -1,0 +1,9 @@
+# Stand-up adapter: shared Emissary-ingress gateway (universal tier) on localhost:8088.
+# Bespoke bring-up (CRDs + helm chart + NodePort patch) lives in the up hook; each subsystem
+# ships its own Mapping CRDs in its adapter overlay (gateway-ingress decision), so subsystems
+# must depend on the gateway to get the CRDs before their overlays apply.
+name: gateway
+tier: universal
+namespaces: [emissary, emissary-system]
+hooks:
+  up: k3s/services/gateway/hooks/up.sh

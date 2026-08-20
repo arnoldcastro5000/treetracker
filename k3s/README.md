@@ -9,9 +9,10 @@ clusters.
 ```bash
 ./k3s/prepare.sh     # ONCE per machine (macOS-specific): install tools (k3d/helm/awscli/libpq).
 ./k3s/prepare-linux.sh # ONCE per machine (Linux, incl. restricted-kernel sandboxes): install tools.
-./k3s/up.sh          # portable, idempotent: bring up the whole stack. Re-run to repair/continue.
-                     #   single step: ./k3s/up.sh gateway | field_data | treetracker_api | admin_client | ...
-./k3s/smoke.sh       # verify: 17-check in-cluster smoke test (health, gateway, auth, DB, capture flow).
+./k3s/up.sh          # portable, idempotent: bring up every subsystem + verify it works. Re-run to repair.
+                     #   one subsystem + its deps: ./k3s/up.sh capture
+                     #   plan only: ./k3s/up.sh plan   re-verify: ./k3s/up.sh verify   skip: --no-verify
+./k3s/smoke.sh       # the capture subsystem's verify hook (17-check in-cluster smoke test); up.sh runs it.
 ./k3s/down.sh        # tear down: delete the k3d cluster (all pods + data).
                      #   ./k3s/down.sh --namespaces   (keep cluster, drop stack namespaces)
                      #   ./k3s/down.sh --images        (also remove built/pulled images)
@@ -64,7 +65,7 @@ docker pull <image> && k3d image import <image> -c greenstand
 
 ## 3. PostgreSQL
 ```bash
-kubectl apply -f k3s/postgres.yaml           # postgis/postgis:15-3.4, ns=data, DB=treetracker (postgres/postgres)
+kubectl apply -f k3s/services/postgres/postgres.yaml           # postgis/postgis:15-3.4, ns=data, DB=treetracker (postgres/postgres)
 kubectl -n data rollout status deploy/postgres
 # second database:
 POD=$(kubectl -n data get pod -l app=postgres -o jsonpath='{.items[0].metadata.name}')
@@ -95,8 +96,8 @@ cd treetracker-field-data/database
 
 ## 6. RabbitMQ (field-data publishes raw-capture-created)
 ```bash
-docker pull rabbitmq:3.13-management && k3d image import rabbitmq:3.13-management -c greenstand
-kubectl apply -f k3s/rabbitmq.yaml           # ns=rabbitmq, svc rabbitmq.rabbitmq.svc:5672 (guest/guest)
+docker pull rabbitmq:3.13-management-alpine && k3d image import rabbitmq:3.13-management-alpine -c greenstand
+kubectl apply -f k3s/services/rabbitmq/rabbitmq.yaml           # ns=rabbitmq, svc rabbitmq.rabbitmq.svc:5672 (guest/guest)
 ```
 
 ## 7. treetracker-field-data service
@@ -140,16 +141,20 @@ never drains and both buckets stay empty:
    `403 … not authorized to perform s3:PutObjectAcl`. Add them to the inline policy alongside
    `s3:PutObject`/`GetObject`/… (IAM eval is live — cached Cognito creds pick it up immediately).
 
-The **bulk-pack-consumer** needs AWS creds to read SQS+S3; `up.sh` creates the k8s Secrets imperatively
-from `aws configure get … --profile greenstand` (never in git). Env keys: `DATABASE_URL`
-(data_pipeline DB), `SQS_URL`, `AWS_ACCESS_KEY_ID`, `AWS_ACCESS_KEY` (note: **not** `_SECRET_`).
-Checks: `aws s3 ls s3://treetracker-local-batch-uploads/ --recursive` ·
-`aws sqs get-queue-attributes --queue-url <q> --attribute-names ApproximateNumberOfMessages`.
+The **bulk-pack-consumer** reads SQS+S3 from the shared LocalStack (fully local, no real AWS). The
+capture adapter (`k3s/services/capture/standalone.yaml`) declares its Secrets as DUMMY literals and
+`up.sh` creates them imperatively (never real creds, never in git). Env keys: `DATABASE_URL`
+(data_pipeline DB), `SQS_URL` (LocalStack queue via `host.k3d.internal`), `AWS_ACCESS_KEY_ID`,
+`AWS_ACCESS_KEY` (note: **not** `_SECRET_`; LocalStack accepts any), plus `AWS_ENDPOINT` +
+`AWS_REGION` from the `localstack-endpoint` secret. Checks (against LocalStack): `awslocal s3 ls
+s3://treetracker-local-batch-uploads/ --recursive` · `awslocal sqs get-queue-attributes
+--queue-url <q> --attribute-names ApproximateNumberOfMessages` (run inside the `greenstand-localstack`
+container).
 
 ## Environment gotchas (found the hard way)
 - **Fake-IP DNS breaks a fresh cluster.** k3d writes the kubeconfig API server as
   `host.docker.internal:<port>`; ClashX fake-IP DNS resolves that to a bogus `198.18.x.x` → `kubectl`
-  gets `EOF`. `up.sh step_cluster` rewrites the server to `https://127.0.0.1:<port>` (serverlb publishes
+  gets `EOF`. `up.sh` (step_cluster) rewrites the server to `https://127.0.0.1:<port>` (serverlb publishes
   6443 on `0.0.0.0`; `127.0.0.1` is in the API cert SANs).
 - **Cold-cluster OpenAPI lag.** Right after create, `kubectl apply` validation fails
   `failed to download openapi … EOF`. `step_cluster` gates on `/readyz`==ok + `/openapi/v2` + node Ready
@@ -169,8 +174,8 @@ Checks: `aws s3 ls s3://treetracker-local-batch-uploads/ --recursive` ·
 The browser reaches everything through **one origin — `http://localhost:8088`** (the k3d loadbalancer →
 Emissary), routed by each service's **shipped `getambassador.io` Mapping** (`/api/admin/` → admin-api,
 `/images/` → images-api, `/field-data/`, `/treetracker/`, all `rewrite: /`) plus an admin-client `/`
-Mapping. `up.sh step_gateway` installs Emissary (CRDs + helm) and a `Listener` + wildcard `Host`
-(`k3s/emissary.yaml`) **before** the service overlays (which now keep their Mappings). No per-service
+Mapping. the gateway adapter hook (`k3s/services/gateway/hooks/up.sh`) installs Emissary (CRDs + helm) and a `Listener` + wildcard `Host`
+(`k3s/services/gateway/emissary.yaml`) **before** the service overlays (which now keep their Mappings). No per-service
 port-forward, no nginx reverse-proxy (admin-client nginx serves static only); single origin ⇒ no CORS.
 
 ## Status

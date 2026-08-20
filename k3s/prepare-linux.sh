@@ -14,6 +14,7 @@ set -euo pipefail
 KUBECTL_VER="${KUBECTL_VER:-v1.36.3}"
 K3D_VER="${K3D_VER:-v5.9.0}"
 HELM_VER="${HELM_VER:-v3.21.3}"
+YQ_VER="${YQ_VER:-v4.44.3}"
 BIN_DIR="${BIN_DIR:-/usr/local/bin}"
 SUBMODULE_BRANCH="${SUBMODULE_BRANCH:-k3s}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -124,6 +125,16 @@ else
   fetch "https://github.com/k3d-io/k3d/releases/download/${K3D_VER}/k3d-linux-${ARCH}" /tmp/k3d \
     || die "k3d download failed (allow github.com, objects.githubusercontent.com, release-assets.githubusercontent.com)"
   $SUDO install -m0755 /tmp/k3d "$BIN_DIR/k3d"; rm -f /tmp/k3d
+fi
+
+# -- 3b. yq (up.sh/down.sh read the stand-up adapters' standalone.yaml with it) -------------
+log "yq $YQ_VER"
+if [ "$(yq --version 2>/dev/null | grep -o "$YQ_VER")" = "$YQ_VER" ]; then
+  info "already installed"
+else
+  fetch "https://github.com/mikefarah/yq/releases/download/${YQ_VER}/yq_linux_${ARCH}" /tmp/yq \
+    || die "yq download failed (allow github.com, objects.githubusercontent.com, release-assets.githubusercontent.com)"
+  $SUDO install -m0755 /tmp/yq "$BIN_DIR/yq"; rm -f /tmp/yq
 fi
 
 # -- 4. helm -------------------------------------------------------------------------------

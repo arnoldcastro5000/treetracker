@@ -1,0 +1,15 @@
+# Stand-up adapter: shared Postgres (universal tier). One instance for the whole environment;
+# each subsystem declares its database(s) in its own adapter and the orchestrator ensures they
+# exist before that subsystem's hooks run (data-stores decision).
+name: postgres
+tier: universal
+namespaces: [data]
+images:
+  - pull: postgis/postgis:15-3.4
+overlay: k3s/services/postgres
+waitFor:
+  - namespace: data
+    deployment: postgres
+hooks:
+  # Rollout Ready is not "accepting connections"; gate on pg_isready before dependents start.
+  post: k3s/services/postgres/hooks/wait-ready.sh

@@ -1,0 +1,6 @@
+# Wraps the plain k8s.yaml (Deployment + Service + `/` Mapping) so the capture adapter's
+# aggregate overlay can include the admin-client like every other service dir.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - k8s.yaml

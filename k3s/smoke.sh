@@ -45,7 +45,15 @@ NR=$(k get nodes --no-headers 2>/dev/null | grep -cw Ready)
 BAD_RE='CrashLoopBackOff|Error|ImagePullBackOff|ErrImagePull|OOMKilled|Evicted|InvalidImageName'
 HARD=""; BADPODS=""
 for attempt in $(seq 1 8); do
-  PODS=$(k get pods -A --no-headers 2>/dev/null)
+  # Exclude pods being deleted (Terminating): a rollout restart leaves the old ReplicaSet pod
+  # terminating, and one that exits non-zero on SIGTERM briefly shows Error in the STATUS column.
+  # That is not a stack fault, so drop pods with a set deletionTimestamp before the health check.
+  TERMINATING=$(k get pods -A --no-headers \
+    -o 'custom-columns=K:.metadata.namespace,N:.metadata.name,D:.metadata.deletionTimestamp' 2>/dev/null \
+    | awk '$3!="<none>"{print $1"/"$2}')
+  PODS=$(k get pods -A --no-headers 2>/dev/null | awk -v term="$TERMINATING" '
+    BEGIN{ n=split(term,a," "); for(i=1;i<=n;i++) t[a[i]]=1 }
+    !($1"/"$2 in t)')
   HARD=$(echo "$PODS" | awk -v re="$BAD_RE" '$4 ~ re {print $1"/"$2"="$4}' | tr '\n' ' ')
   [ -n "$HARD" ] && break
   BADPODS=$(echo "$PODS" | awk '$4!="Running" && $4!="Completed" {print $1"/"$2"="$4}' | tr '\n' ' ')
@@ -57,10 +65,14 @@ elif [ -z "$BADPODS" ]; then ok "all pods Running/Completed"
 else bad "unhealthy: $BADPODS"; fi
 
 echo "== 2. gateway routing (host:8088 -> serverlb -> NodePort 30080 -> emissary)"
-for path in / /api/admin/; do
-  c=$(curl -s -o /dev/null -m 10 -w '%{http_code}' "$GW$path")
-  [ "$c" != "000" ] && ok "$path -> HTTP $c" || bad "$path unreachable"
-done
+# `/` MUST serve the admin-client (HTTP 200): a dropped `/` Mapping or a broken admin-client build
+# would still answer non-000 (a 404 from emissary), so gate hard on 200 here. `/api/admin/` is an
+# API root with no index route, so any non-000 answer proves the mapping routes (step 3 exercises
+# a real endpoint on it).
+c=$(curl -s -o /dev/null -m 10 -w '%{http_code}' "$GW/")
+[ "$c" = 200 ] && ok "/ -> HTTP 200 (admin-client served)" || bad "/ -> HTTP $c (expected 200, admin-client not served)"
+c=$(curl -s -o /dev/null -m 10 -w '%{http_code}' "$GW/api/admin/")
+[ "$c" != "000" ] && ok "/api/admin/ -> HTTP $c" || bad "/api/admin/ unreachable"
 
 echo "== 3. admin-api auth"
 TOKEN=$(curl -s -m 15 -X POST "$GW/api/admin/auth/login" -H 'Content-Type: application/json' \

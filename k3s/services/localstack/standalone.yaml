@@ -1,0 +1,11 @@
+# Stand-up adapter: shared LocalStack (S3 + SQS), a conditional tier service (shared-object-
+# storage decision). A HOST-side docker container on :4566, not a cluster workload: the Android
+# emulator must reach it as 10.0.2.2:4566 and in-cluster clients as host.k3d.internal:4566.
+# The up hook only runs the container and waits for readiness; each subsystem DECLARES its
+# buckets/queues/notifications in its own adapter (objectStorage) and the orchestrator
+# provisions them idempotently in one region (eu-central-1).
+name: localstack
+tier: conditional
+hooks:
+  up: k3s/services/localstack/hooks/up.sh
+  down: k3s/services/localstack/hooks/down.sh

@@ -1,0 +1,15 @@
+# Aggregate overlay for the capture subsystem: every service the pipeline needs, applied as one
+# unit after the adapter's images are built and its secrets exist. The referenced dirs are the
+# vendored per-service overlays (see ../README.md); they are not adapters themselves.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../treetracker-field-data
+  - ../treetracker-api
+  - ../images-api
+  - ../bulk-pack-transformer-v2
+  - ../bulk-pack-transformer
+  - ../bulk-pack-processor
+  - ../bulk-pack-consumer
+  - ../treetracker-admin-api
+  - ../treetracker-admin-client

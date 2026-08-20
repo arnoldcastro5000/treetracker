@@ -12,7 +12,6 @@ namespace: bulk-pack-services
 resources:
   - bulk-pack-transformer-deployment.yaml
   - bulk-pack-transformer-service.yaml
-  - namespace.yaml
 images:
   - name: greenstand/bulk-pack-transformer
     newName: bulk-pack-transformer

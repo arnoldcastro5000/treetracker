@@ -1,0 +1,13 @@
+# Stand-up adapter: shared RabbitMQ broker (conditional tier). Stands up only when a selected
+# subsystem depends on it (identity-coexistence decision: tier splits into universal vs
+# conditional). The capture pipeline depends on it (treetracker-field-data publishes
+# raw-capture-created).
+name: rabbitmq
+tier: conditional
+namespaces: [rabbitmq]
+images:
+  - pull: rabbitmq:3.13-management-alpine
+overlay: k3s/services/rabbitmq
+waitFor:
+  - namespace: rabbitmq
+    deployment: rabbitmq

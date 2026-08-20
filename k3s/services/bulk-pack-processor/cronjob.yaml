@@ -36,11 +36,7 @@ spec:
                   value: "http://bulk-pack-transformer.bulk-pack-services/"       # v1 (not deployed; only for v1 packs)
                 - name: DATA_INPUT_SERVICE_URL_V2
                   value: "http://bulk-pack-transformer-v2.bulk-pack-services/"     # v2 path (what the app uploads)
----
-apiVersion: v1
-kind: Secret
-metadata:
-  name: bulk-pack-database-connection
-  namespace: bulk-pack-services
-stringData:
-  db: "postgresql://postgres:postgres@postgres.data.svc.cluster.local:5432/data_pipeline"
+# The bulk-pack-database-connection Secret is declared once by the capture adapter
+# (k3s/services/capture/standalone.yaml) and created imperatively by up.sh before this overlay
+# applies. Do NOT redefine it here: a second definition (stringData vs the adapter's data form)
+# makes kubectl apply flap "configured" every run and needlessly rolls the pods.

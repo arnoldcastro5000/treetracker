@@ -1,7 +1,62 @@
-# k3s/services - vendored local-dev deployment config
+# k3s/services - stand-up adapters + vendored local-dev deployment config
 
-This directory holds the Kubernetes config needed to run each backend service in the local k3d
-stack (`k3s/up.sh`). The files are vendored into the superproject rather than pulled from each
+This directory holds two kinds of folders:
+
+1. **Stand-up adapters** - every folder with a `standalone.yaml` is one SUBSYSTEM the
+   orchestrator (`k3s/up.sh`) discovers and stands up. Current adapters: `postgres`, `gateway`,
+   `rabbitmq`, `localstack` (shared tier) and `capture` (the capture -> verify pipeline).
+2. **Vendored per-service overlays** - folders without a `standalone.yaml` (for example
+   `treetracker-field-data/`). They are plain kustomize overlays that an adapter's aggregate
+   overlay references; the orchestrator never reads them directly.
+
+## The stand-up contract (`standalone.yaml`)
+
+Adding a repo to the environment = adding one adapter folder here. The orchestrator is never
+edited. Schema (all paths are repo-root relative):
+
+```yaml
+name: my-subsystem
+tier: universal | conditional   # tier services only. universal = always stands up;
+                                # conditional = only when a selected subsystem dependsOn it.
+optIn: true                     # subsystems only: excluded from a bare `up.sh`, included when named.
+dependsOn: [postgres, gateway]  # adapters that must be fully up first (transitive).
+namespaces: [my-ns]             # the namespace GROUP this subsystem owns (collision-checked).
+databases: [mydb]               # ensured (idempotent createdb) on the shared Postgres before hooks.
+images:
+  - name: my-service            # built from `context` as my-service:local, imported into the cluster
+    context: my-service         # (submodule dir). Optional: dockerfile, extraContexts {name: path}.
+  - pull: redis:7-alpine        # pulled + imported verbatim (no build).
+secrets:                        # created imperatively as plain Secrets. DUMMY literals only,
+  - namespace: my-ns            # never real credentials. ${VAR} expands from the orchestrator
+    name: my-secret             # config (LOCALSTACK_PORT, OBJECT_STORAGE_REGION, ...).
+    literals: { key: value }
+objectStorage:                  # provisioned idempotently on the shared LocalStack, one region.
+  buckets: [my-bucket]
+  queues: [my-queue]
+  notifications:
+    - { bucket: my-bucket, queue: my-queue, events: ["s3:ObjectCreated:*"] }
+overlay: k3s/services/my-subsystem   # kustomize dir applied after images are in the cluster.
+waitFor:                        # Deployments that signal ready. `image` ties the Deployment to
+  - namespace: my-ns            # its build so --rebuild rolls exactly what changed.
+    deployment: my-service
+    image: my-service:local
+hooks:
+  pre:  path.sh                 # after deps + databases + objectStorage, before the overlay applies
+  up:   path.sh                 # after the overlay (or instead of one) for bespoke bring-up
+  post: path.sh                 # after waitFor (seeds, readiness gates)
+  down: path.sh                 # run by down.sh for state outside the cluster
+verify: path.sh                 # the subsystem's definition-of-done check; up.sh runs it as a
+                                # hard gate after stand-up (skip: --no-verify; alone: up.sh verify)
+```
+
+Per adapter the orchestrator runs: ensure namespaces -> create secrets -> ensure databases ->
+provision object storage -> `pre` -> build/pull images -> apply `overlay` -> `up` -> `waitFor` ->
+`post`; then, after every selected adapter is up, each `verify`. Contract tests:
+`k3s/orchestrator-test.sh`.
+
+## Vendored overlays
+
+The overlay files are vendored into the superproject rather than pulled from each
 service submodule, because the superproject is the long-term home for how the stack runs locally
 (the monorepo direction) and because it removes any dependency on the service repos' `k3s` side
 branches, which could be squash-merged or deleted.

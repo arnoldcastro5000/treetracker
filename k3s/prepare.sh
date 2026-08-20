@@ -80,7 +80,7 @@ fi
 # ── 1. Host tools (Homebrew) ────────────────────────────────────────────────
 log "host tools"
 command -v brew >/dev/null 2>&1 || die "Homebrew not installed — https://brew.sh"
-for f in k3d helm awscli libpq; do
+for f in k3d helm awscli libpq yq; do
   brew list "$f" >/dev/null 2>&1 || { info "brew install $f"; brew install "$f"; }
 done
 # libpq is keg-only → link psql/pg_dump onto PATH
