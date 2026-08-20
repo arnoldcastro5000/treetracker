@@ -10,7 +10,7 @@
 #
 # Usage:
 #   ./k3s/up.sh                 # all steps
-#   ./k3s/up.sh postgres        # one step (cluster|infra_images|postgres|migrate|rabbitmq|field_data|...)
+#   ./k3s/up.sh postgres        # one step (cluster|infra_images|postgres|migrate|rabbitmq|localstack|field_data|...)
 #   ./k3s/up.sh --rebuild       # force rebuild every image even if already in the cluster
 #   ./k3s/up.sh --rebuild admin # force rebuild just one step's image
 #
@@ -40,6 +40,20 @@ ADMIN_CLIENT_PORT="${ADMIN_CLIENT_PORT:-3001}"   # host port-forward → admin-c
 GATEWAY_SERVICE_TYPE="${GATEWAY_SERVICE_TYPE:-NodePort}"
 GATEWAY_NODEPORT_HTTP="${GATEWAY_NODEPORT_HTTP:-30080}"
 GATEWAY_NODEPORT_HTTPS="${GATEWAY_NODEPORT_HTTPS:-30443}"
+
+# Route 2 — fully-local object storage (top-level "Shared object storage" decision; capture-map
+# tickets 14/16). LocalStack (S3 + SQS) runs as a host-side container on :4566, provisioned in one
+# region (eu-central-1) end to end. In-cluster clients reach it via host.k3d.internal:4566; the
+# Android emulator via 10.0.2.2:4566 (both are the host). Default on. USE_LOCALSTACK=0 opts out to
+# real AWS, which up.sh does not orchestrate for this stand-up (the fully-local map retired it).
+USE_LOCALSTACK="${USE_LOCALSTACK:-1}"
+LOCALSTACK_IMAGE="${LOCALSTACK_IMAGE:-localstack/localstack:3.8}"
+LOCALSTACK_NAME="${LOCALSTACK_NAME:-greenstand-localstack}"
+LOCALSTACK_PORT="${LOCALSTACK_PORT:-4566}"
+OBJECT_STORAGE_REGION="${OBJECT_STORAGE_REGION:-eu-central-1}"
+BATCH_UPLOADS_BUCKET="${BATCH_UPLOADS_BUCKET:-treetracker-local-batch-uploads}"
+IMAGES_BUCKET="${IMAGES_BUCKET:-treetracker-local-images}"
+UPLOAD_QUEUE="${UPLOAD_QUEUE:-treetracker-local-queue}"
 
 # Homebrew paths are macOS-only; guard them so Linux does not shell out to a missing `brew`.
 [ "$(uname)" = Darwin ] && export PATH="/opt/homebrew/bin:$PATH"
@@ -164,12 +178,13 @@ disk_preflight() {
 # Restart the pods only when we (re)built an image the Deployment was already using (so the new
 # same-tag :local image actually loads) OR the Deployment is unhealthy (self-heal). A healthy,
 # no-build re-run touches nothing → same ReplicaSet, same pods (idempotent).
-build_deploy() {   # $1 tag  $2 build-ctx  $3 kustomize-dir  $4 namespace  $5 deploy
-  local tag="$1" ctx="$2" kdir="$3" ns="$4" dep="$5" existed=0 built=0 logf="/tmp/up-${5}-build.log"
+build_deploy() {   # $1 tag  $2 build-ctx  $3 kustomize-dir  $4 namespace  $5 deploy  [$6 dockerfile]
+  local tag="$1" ctx="$2" kdir="$3" ns="$4" dep="$5" dockerfile="${6:-}" existed=0 built=0 logf="/tmp/up-${5}-build.log"
+  local df_args=(); [ -n "$dockerfile" ] && df_args=( -f "$dockerfile" )
   if deploy_exists "$ns" "$dep"; then existed=1; fi
   if build_needed "$tag"; then
     disk_preflight; info "building $tag"
-    docker build -t "$tag" "$ctx" >"$logf" 2>&1 || die "$dep image build failed (see $logf)"
+    docker build -t "$tag" ${df_args[@]+"${df_args[@]}"} "$ctx" >"$logf" 2>&1 || die "$dep image build failed (see $logf)"
     load_image "$tag"; built=1
   else
     info "$tag present in cluster -> skip build"
@@ -306,10 +321,18 @@ step_cluster() {
 # k3d's own host.k3d.internal lives in a different zone and is untouched. Idempotent.
 step_coredns() {
   [ "$ENV" = local ] || { info "coredns: skipped (ENV=$ENV, not k3d)"; return 0; }
-  log "coredns-custom (NXDOMAIN for *.docker.internal, musl getaddrinfo search-walk fix)"
+  log "coredns-custom (NXDOMAIN for *.docker.internal + host.k3d.internal → host gateway)"
+  # k3d normally injects host.k3d.internal, but this custom cluster (host-gw flannel, servicelb
+  # disabled) has no such record → in-cluster pods cannot reach a host-side service (LocalStack on
+  # :4566). Map host.k3d.internal to the k3d docker-network gateway (= the host as seen from the
+  # node), discovered at runtime, so the overlays' AWS_ENDPOINT=http://host.k3d.internal:4566 works.
+  local gw
+  gw=$(docker exec "$NODE" sh -c "ip route | awk '/default/{print \$3}'" 2>/dev/null || true)
+  [ -n "$gw" ] || die "could not determine the k3d node's host gateway (is $NODE running?)"
+  info "host.k3d.internal -> $gw"
   local rv_before rv_after
   rv_before=$(k -n kube-system get cm coredns-custom -o jsonpath='{.metadata.resourceVersion}' 2>/dev/null || true)
-  k apply -f - >/dev/null <<'YAML' || die "coredns-custom apply failed"
+  k apply -f - >/dev/null <<YAML || die "coredns-custom apply failed"
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -320,6 +343,13 @@ data:
     docker.internal:53 {
       template IN ANY {
         rcode NXDOMAIN
+      }
+    }
+  k3d-internal.server: |
+    k3d.internal:53 {
+      hosts {
+        $gw host.k3d.internal
+        fallthrough
       }
     }
 YAML
@@ -420,10 +450,84 @@ EOF
   k apply -f "$K3S_DIR/emissary.yaml" >/dev/null   # Listener + wildcard Host
 }
 
+# LocalStack (S3 + SQS) — the fully-local object store for Route 2. A host-side container on :4566,
+# provisioned idempotently in one region (eu-central-1) so the S3 event carries production's region.
+# In-cluster clients reach it via host.k3d.internal:4566; the Android emulator via 10.0.2.2:4566.
+# Conditional tier: skipped when USE_LOCALSTACK=0 (opt out to real AWS, not orchestrated here).
+step_localstack() {
+  if [ "$USE_LOCALSTACK" != 1 ]; then
+    info "localstack: skipped (USE_LOCALSTACK=$USE_LOCALSTACK)"; return 0
+  fi
+  log "localstack (S3 + SQS on :$LOCALSTACK_PORT, region $OBJECT_STORAGE_REGION)"
+  command -v docker >/dev/null 2>&1 || die "docker missing — run ./k3s/prepare.sh"
+  # Image present? Pull once (a firewall block is deterministic → fail fast with the real cause).
+  if ! docker image inspect "$LOCALSTACK_IMAGE" >/dev/null 2>&1; then
+    local i
+    for i in $(seq 1 10); do
+      docker pull "$LOCALSTACK_IMAGE" >/dev/null 2>&1 && break
+      [ "$i" = 1 ]  && net_check_die "docker pull $LOCALSTACK_IMAGE" registry-1.docker.io
+      [ "$i" = 10 ] && die "docker pull $LOCALSTACK_IMAGE failed after 10 attempts"
+      info "pull $LOCALSTACK_IMAGE: retry $i"; sleep 5
+    done
+  fi
+  # Container lifecycle: reuse a running one, start a stopped one, else create. DEFAULT_REGION on
+  # the container makes eu-central-1 its default so a bucket without an explicit constraint still
+  # lands in-region; the provisioning below sets it explicitly regardless.
+  if docker ps --filter "name=^/${LOCALSTACK_NAME}$" --filter status=running -q | grep -q .; then
+    info "$LOCALSTACK_NAME already running"
+  elif docker ps -a --filter "name=^/${LOCALSTACK_NAME}$" -q | grep -q .; then
+    info "starting existing $LOCALSTACK_NAME"; docker start "$LOCALSTACK_NAME" >/dev/null
+  else
+    info "creating $LOCALSTACK_NAME"
+    docker run -d --name "$LOCALSTACK_NAME" \
+      -p "${LOCALSTACK_PORT}:4566" \
+      -e SERVICES=s3,sqs -e DEFAULT_REGION="$OBJECT_STORAGE_REGION" \
+      "$LOCALSTACK_IMAGE" >/dev/null || die "localstack container failed to start"
+  fi
+  # Readiness: the health endpoint must list s3 and sqs before provisioning.
+  local i health
+  for i in $(seq 1 60); do
+    health=$(curl -s -m 3 "http://localhost:${LOCALSTACK_PORT}/_localstack/health" 2>/dev/null || true)
+    case "$health" in *'"sqs"'*'"s3"'*|*'"s3"'*'"sqs"'*) break ;; esac
+    sleep 2
+  done
+  case "$health" in *'"s3"'*'"sqs"'*|*'"sqs"'*'"s3"'*) : ;; *) die "localstack never became ready on :$LOCALSTACK_PORT (s3+sqs)" ;; esac
+  # Provision idempotently via awslocal INSIDE the container (no host aws-cli dependency). Region is
+  # forced to eu-central-1 for buckets and queue so S3 and SQS agree end to end (ticket 16). Bucket
+  # create is not idempotent (409 on re-run) → tolerate; queue create + notification config are.
+  local qarn="arn:aws:sqs:${OBJECT_STORAGE_REGION}:000000000000:${UPLOAD_QUEUE}"
+  docker exec -i "$LOCALSTACK_NAME" env AWS_DEFAULT_REGION="$OBJECT_STORAGE_REGION" sh -s <<EOF >/dev/null 2>&1 || die "localstack provisioning failed"
+set -e
+awslocal s3api create-bucket --bucket "$BATCH_UPLOADS_BUCKET" --create-bucket-configuration LocationConstraint="$OBJECT_STORAGE_REGION" 2>/dev/null || true
+awslocal s3api create-bucket --bucket "$IMAGES_BUCKET"        --create-bucket-configuration LocationConstraint="$OBJECT_STORAGE_REGION" 2>/dev/null || true
+awslocal sqs create-queue --queue-name "$UPLOAD_QUEUE"
+awslocal s3api put-bucket-notification-configuration --bucket "$BATCH_UPLOADS_BUCKET" \
+  --notification-configuration '{"QueueConfigurations":[{"QueueArn":"$qarn","Events":["s3:ObjectCreated:*"]}]}'
+EOF
+  info "provisioned: s3://$BATCH_UPLOADS_BUCKET, s3://$IMAGES_BUCKET, sqs $UPLOAD_QUEUE ($OBJECT_STORAGE_REGION), S3→SQS notification"
+}
+
+# Ensure a namespace exists before imperative Secrets land in it (a single-step run may hit a step
+# before the overlay that ships the Namespace has applied).
+ensure_ns() { k create namespace "$1" --dry-run=client -o yaml | k apply -f - >/dev/null; }
+
 step_field_data()     { log "treetracker-field-data";      build_deploy treetracker-field-data:local    "$ROOT/treetracker-field-data"    "$K3S_DIR/services/treetracker-field-data"    field-data-api      treetracker-field-data; }
 step_treetracker_api(){ log "treetracker-api (grower_accounts)"; build_deploy treetracker-api:local  "$ROOT/treetracker-api"           "$K3S_DIR/services/treetracker-api"           treetracker-api     treetracker-api; }
 step_images_api()     { log "images-api (resize/proxy behind admin-client /images)"; build_deploy images-api:local "$ROOT/images-api" "$K3S_DIR/services/images-api"                images-api          images-api; }
 step_transformer_v2() { log "bulk-pack-transformer-v2";    build_deploy bulk-pack-transformer-v2:local  "$ROOT/bulk-pack-transformer-v2"  "$K3S_DIR/services/bulk-pack-transformer-v2"  bulk-pack-services  bulk-pack-transformer-v2; }
+# v1 transformer (planter path). The processor routes wallet_registrations / sessions here; it writes
+# the planter to the treetracker DB so field-data's LegacyTree check passes. Built from the vendored
+# Dockerfile (ticket 15); the treetracker-DB secret is supplied imperatively (no SealedSecret locally).
+step_transformer() {
+  log "bulk-pack-transformer (v1 planter path)"
+  ensure_ns bulk-pack-services
+  k -n bulk-pack-services create secret generic treetracker-database-connection \
+    --from-literal=db='postgresql://postgres:postgres@postgres.data.svc.cluster.local:5432/treetracker' \
+    --dry-run=client -o yaml | k apply -f - >/dev/null
+  build_deploy bulk-pack-transformer:local "$ROOT/bulk-pack-transformer" \
+    "$K3S_DIR/services/bulk-pack-transformer" bulk-pack-services bulk-pack-transformer \
+    "$K3S_DIR/services/bulk-pack-transformer/Dockerfile"
+}
 
 # Processor is a CronJob (no Deployment): gate the build, apply the overlay. Its next scheduled Job
 # creates a fresh pod that pulls the current :local image from containerd, so no rollout restart.
@@ -443,45 +547,41 @@ step_processor() {
 }
 step_consumer() {
   log "bulk-pack-consumer (SQS → data_pipeline.bulk_tree_upload)"
-  # The consumer is the only component that needs AWS. Without creds, skip it (loud, not fatal):
-  # everything downstream is exercised by injecting at the bulk_tree_upload boundary (smoke.sh).
-  # REQUIRE_CONSUMER=1 restores the hard failure for CI that must exercise the real S3→SQS path.
-  local akid="" asec=""
-  if command -v aws >/dev/null 2>&1; then
-    akid=$(aws configure get aws_access_key_id --profile "${AWS_PROFILE:-greenstand}" 2>/dev/null || true)
-    asec=$(aws configure get aws_secret_access_key --profile "${AWS_PROFILE:-greenstand}" 2>/dev/null || true)
-  fi
-  if [ -z "$akid" ] || [ -z "$asec" ]; then
-    [ "${REQUIRE_CONSUMER:-0}" = 1 ] && die "no AWS creds for profile '${AWS_PROFILE:-greenstand}' and REQUIRE_CONSUMER=1"
-    info "SKIPPED: no AWS creds for profile '${AWS_PROFILE:-greenstand}'."
-    info "  S3→SQS ingest is unavailable; inject at the bulk_tree_upload boundary instead (./k3s/smoke.sh)."
-    info "  Enable it with: aws configure --profile ${AWS_PROFILE:-greenstand}"
+  # Fully-local default: the consumer reads the LocalStack queue via host.k3d.internal:4566 with
+  # dummy creds (LocalStack accepts any). No real AWS, no secret to leak, so a re-run never clobbers
+  # LocalStack config with real values (the old bug). USE_LOCALSTACK=0 would mean real AWS, which
+  # up.sh does not orchestrate for this fully-local stand-up (the map retired the dev backend): skip
+  # the consumer loudly (not fatal) so the rest of `up.sh all` still comes up.
+  if [ "$USE_LOCALSTACK" != 1 ]; then
+    info "SKIPPED: USE_LOCALSTACK=0 (real AWS) is not orchestrated here; the consumer code supports"
+    info "  AWS_ENDPOINT-less real AWS, but wiring it is out of scope for the fully-local stand-up."
     return 0
   fi
-  local tag=bulk-pack-consumer:local ns=bulk-pack-services dep=bulk-pack-consumer existed=0 built=0
-  if deploy_exists "$ns" "$dep"; then existed=1; fi
-  if build_needed "$tag"; then
-    disk_preflight; info "building $tag"
-    docker build -t "$tag" "$ROOT/bulk-pack-consumer" >/tmp/up-bulk-pack-consumer-build.log 2>&1 \
-      || die "consumer image build failed (see /tmp/up-bulk-pack-consumer-build.log)"
-    load_image "$tag"; built=1
-  else
-    info "$tag present in cluster -> skip build"
-  fi
-  # Secrets created imperatively (real AWS creds never land in git): DB + SQS URL literals,
-  # AWS creds from the local `greenstand` CLI profile.
-  k -n bulk-pack-services create secret generic bulk-pack-database-connection \
+  local ns=bulk-pack-services dep=bulk-pack-consumer
+  ensure_ns "$ns"
+  # Secrets the base Deployment reads. The SQS URL is the LocalStack queue reached from the cluster
+  # via host.k3d.internal; the overlay adds AWS_ENDPOINT + AWS_REGION so the SDK talks to LocalStack.
+  k -n "$ns" create secret generic bulk-pack-database-connection \
     --from-literal=db='postgresql://postgres:postgres@postgres.data.svc.cluster.local:5432/data_pipeline' \
     --dry-run=client -o yaml | k apply -f - >/dev/null
-  k -n bulk-pack-services create secret generic sqs-url \
-    --from-literal=sqsUrl="${SQS_QUEUE_URL:-https://sqs.eu-central-1.amazonaws.com/053061259712/treetracker-local-queue}" \
+  k -n "$ns" create secret generic sqs-url \
+    --from-literal=sqsUrl="http://host.k3d.internal:${LOCALSTACK_PORT}/000000000000/${UPLOAD_QUEUE}" \
     --dry-run=client -o yaml | k apply -f - >/dev/null
-  k -n bulk-pack-services create secret generic aws-key-id --from-literal=accessKeyId="$akid" \
+  k -n "$ns" create secret generic aws-key-id --from-literal=accessKeyId=test \
     --dry-run=client -o yaml | k apply -f - >/dev/null
-  k -n bulk-pack-services create secret generic aws-key --from-literal=secretAccessKey="$asec" \
+  k -n "$ns" create secret generic aws-key --from-literal=secretAccessKey=test \
     --dry-run=client -o yaml | k apply -f - >/dev/null
-  k apply -k "$ROOT/bulk-pack-consumer/deployment/overlays/local" >/dev/null
-  finish_deploy "$ns" "$dep" "$built" "$existed"
+  build_deploy bulk-pack-consumer:local "$ROOT/bulk-pack-consumer" \
+    "$K3S_DIR/services/bulk-pack-consumer" "$ns" "$dep" \
+    "$K3S_DIR/services/bulk-pack-consumer/Dockerfile"
+  # Inject the LocalStack endpoint + region from up.sh's vars (not hardcoded in the overlay) so
+  # LOCALSTACK_PORT / OBJECT_STORAGE_REGION are a single source of truth. The consumer reaches
+  # LocalStack via the host (host.k3d.internal) on the host publish port LOCALSTACK_PORT. Idempotent:
+  # `set env` is a no-op (no rollout) when the values already match.
+  k -n "$ns" set env "deploy/$dep" \
+    AWS_ENDPOINT="http://host.k3d.internal:${LOCALSTACK_PORT}" \
+    AWS_REGION="$OBJECT_STORAGE_REGION" >/dev/null
+  k -n "$ns" rollout status "deploy/$dep" --timeout=120s
 }
 step_keycloak()       { info "SKIPPED: admin stack uses the legacy user system — no Keycloak needed"; }
 step_admin() {
@@ -557,7 +657,8 @@ SQL
 run_all() {
   step_cluster; step_coredns; step_infra_images; step_postgres; step_migrate; step_rabbitmq
   step_gateway   # BEFORE service overlays — they ship Ambassador Mappings (need the CRDs)
-  step_field_data; step_treetracker_api; step_transformer_v2; step_processor; step_consumer
+  step_localstack   # object store up before the consumer connects to its queue
+  step_field_data; step_treetracker_api; step_transformer_v2; step_transformer; step_processor; step_consumer
   step_admin; step_images_api; step_admin_client
   log "done — full capture→verify backend up on $CONTEXT (gateway: $GATEWAY_URL)"
 }
@@ -577,6 +678,6 @@ trap stop_pf EXIT
 step_preflight
 case "$STEP" in
   all) run_all ;;
-  cluster|coredns|infra_images|postgres|migrate|rabbitmq|gateway|field_data|treetracker_api|images_api|transformer_v2|processor|consumer|keycloak|admin|admin_client) "step_${STEP}" ;;
-  *)   die "unknown step '${STEP}'. steps: cluster coredns infra_images postgres migrate rabbitmq gateway field_data treetracker_api images_api transformer_v2 processor consumer keycloak admin admin_client (or 'all'); flags: --rebuild" ;;
+  cluster|coredns|infra_images|postgres|migrate|rabbitmq|gateway|localstack|field_data|treetracker_api|images_api|transformer_v2|transformer|processor|consumer|keycloak|admin|admin_client) "step_${STEP}" ;;
+  *)   die "unknown step '${STEP}'. steps: cluster coredns infra_images postgres migrate rabbitmq gateway localstack field_data treetracker_api images_api transformer_v2 transformer processor consumer keycloak admin admin_client (or 'all'); flags: --rebuild" ;;
 esac

@@ -1,0 +1,24 @@
+# Local (k3d) overlay for the v1 bulk-pack-transformer.
+# The processor routes wallet_registrations / device_configurations / sessions to this service
+# (bulk-pack-transformer.bulk-pack-services). It calls processPlanter, which writes the planter
+# straight to the treetracker DB, so field-data's raw-capture check (LegacyTree "Legacy planter
+# has not been created") passes on the next processor cycle. Without this service those entities
+# are dropped and every capture fails 422. Vendored manifests (base bundles a SealedSecret and
+# kustomize path-security forbids reaching a single file above this dir); the DB secret is
+# supplied imperatively.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: bulk-pack-services
+resources:
+  - bulk-pack-transformer-deployment.yaml
+  - bulk-pack-transformer-service.yaml
+  - namespace.yaml
+images:
+  - name: greenstand/bulk-pack-transformer
+    newName: bulk-pack-transformer
+    newTag: local
+patches:
+  - target: { kind: Deployment, name: bulk-pack-transformer }
+    patch: |-
+      - op: remove
+        path: /spec/template/spec/affinity

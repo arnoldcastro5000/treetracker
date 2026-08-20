@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bulk-pack-consumer
+  labels:
+    app: bulk-pack-consumer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bulk-pack-consumer
+  template:
+    metadata:
+      labels:
+        app: bulk-pack-consumer
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: doks.digitalocean.com/node-pool
+                operator: In
+                values:
+                - microservices-node-pool
+      containers:
+      - name: bulk-pack-consumer
+        image: greenstand/bulk-pack-consumer:latest
+        env:
+          - name: DATABASE_URL
+            valueFrom:
+              secretKeyRef:
+                name: bulk-pack-database-connection
+                key: db
+          - name: SQS_URL
+            valueFrom:
+              secretKeyRef:
+                name: sqs-url
+                key: sqsUrl
+          - name: AWS_ACCESS_KEY_ID
+            valueFrom:
+              secretKeyRef:
+                name: aws-key-id
+                key: accessKeyId
+          - name: AWS_ACCESS_KEY
+            valueFrom:
+              secretKeyRef:
+                name: aws-key
+                key: secretAccessKey
+          # Fully-local: no external log sink. The upstream base ships REMOTE_LOG_URL pointing at a
+          # public DigitalOcean host; drop it so trace logs never leave the machine (and never stall
+          # on a blocked-egress sandbox). Log level stays at info to keep the pipeline log readable.
+          - name: NODE_LOG_LEVEL
+            value: info

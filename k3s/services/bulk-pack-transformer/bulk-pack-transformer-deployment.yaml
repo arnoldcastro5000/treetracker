@@ -1,0 +1,38 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bulk-pack-transformer
+  labels:
+    app: bulk-pack-transformer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bulk-pack-transformer
+  template:
+    metadata:
+      labels:
+        app: bulk-pack-transformer
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: doks.digitalocean.com/node-pool
+                operator: In
+                values:
+                - microservices-node-pool
+      containers:
+      - name: bulk-pack-former
+        image: greenstand/bulk-pack-transformer:latest
+        env:
+          - name: DATABASE_URL
+            valueFrom:
+              secretKeyRef:
+                name: treetracker-database-connection
+                key: db
+          - name: FIELD_DATA_URL
+            value: "http://treetracker-field-data.field-data-api/"
+          - name: USE_FIELD_DATA
+            value: "false"

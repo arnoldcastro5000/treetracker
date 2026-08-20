@@ -1,0 +1,25 @@
+# Local (k3d) overlay for bulk-pack-consumer, pointed at LocalStack (Route 2, fully local).
+# Reuses the base deployment (which reads DATABASE_URL, SQS_URL and the AWS_* env from secrets),
+# swaps in the locally-built image, and drops the DigitalOcean node-affinity. The two LocalStack
+# knobs the base lacks (AWS_ENDPOINT + AWS_REGION) are injected by up.sh from LOCALSTACK_PORT and
+# OBJECT_STORAGE_REGION (single source of truth), not hardcoded here. The secrets (db, sqs-url,
+# aws-key-id, aws-key) are created imperatively by up.sh, so no real AWS creds ever land in git.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: bulk-pack-services
+resources:
+  # A vendored copy of the base Deployment manifest. The base kustomization also bundles
+  # SealedSecrets (they need the sealed-secrets controller), and kustomize path-security
+  # forbids referencing a single file above this directory. Locally the four secrets are
+  # supplied as plain Secrets instead, so only the Deployment is reused.
+  - bulk-pack-consumer-deployment.yaml
+  - namespace.yaml
+images:
+  - name: greenstand/bulk-pack-consumer
+    newName: bulk-pack-consumer
+    newTag: local
+patches:
+  - target: { kind: Deployment, name: bulk-pack-consumer }
+    patch: |-
+      - op: remove
+        path: /spec/template/spec/affinity
