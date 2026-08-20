@@ -1,0 +1,25 @@
+# Stand-up adapter: shared Keycloak (conditional tier). Stands up only when a selected subsystem
+# depends on it (identity-coexistence decision: the tier splits into universal vs conditional).
+# The wallet-app and web-map subsystems depend on it for login; the capture pipeline does not.
+# Persists to the shared Postgres `keycloak` schema, so it depends on postgres.
+name: keycloak
+tier: conditional
+dependsOn: [postgres]
+namespaces: [keycloak]
+# Dummy master-admin literals (never real creds) from the orchestrator config. A first boot uses
+# them to bootstrap the master admin; a subsystem hook then uses them with kcadm to create its
+# own client. ${VAR} expands from the orchestrator config (single source of truth).
+secrets:
+  - namespace: keycloak
+    name: keycloak-admin
+    literals:
+      username: ${KEYCLOAK_ADMIN}
+      password: ${KEYCLOAK_ADMIN_PASSWORD}
+images:
+  - pull: quay.io/keycloak/keycloak:26.0.7
+overlay: k3s/services/keycloak
+waitFor:
+  - namespace: keycloak
+    deployment: keycloak
+hooks:
+  post: k3s/services/keycloak/hooks/wait-realm.sh

@@ -11,7 +11,7 @@ command -v docker >/dev/null 2>&1 || die "docker missing - run ./k3s/prepare.sh"
 if ! docker image inspect "$LOCALSTACK_IMAGE" >/dev/null 2>&1; then
   for i in $(seq 1 10); do
     docker pull "$LOCALSTACK_IMAGE" >/dev/null 2>&1 && break
-    [ "$i" = 1 ]  && net_check_die "docker pull $LOCALSTACK_IMAGE" registry-1.docker.io
+    [ "$i" = 1 ]  && net_check_die "docker pull $LOCALSTACK_IMAGE" "$(image_registry_host "$LOCALSTACK_IMAGE")"
     [ "$i" = 10 ] && die "docker pull $LOCALSTACK_IMAGE failed after 10 attempts"
     info "pull $LOCALSTACK_IMAGE: retry $i"; sleep 5
   done

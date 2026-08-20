@@ -50,6 +50,17 @@ UPLOAD_QUEUE="${UPLOAD_QUEUE:-treetracker-local-queue}"
 ADMIN_USER="${ADMIN_USER:-test}"
 ADMIN_PASSWORD="${ADMIN_PASSWORD:-ieVyaGqyMX}"
 
+# Keycloak identity tier (conditional; identity-coexistence decision). Realm `treetracker` is
+# imported at container start; the master bootstrap admin lets a subsystem hook (kcadm) create its
+# own confidential client. Every value here is a LOCAL DUMMY literal, never a real credential.
+KEYCLOAK_REALM="${KEYCLOAK_REALM:-treetracker}"
+KEYCLOAK_ADMIN="${KEYCLOAK_ADMIN:-admin}"
+KEYCLOAK_ADMIN_PASSWORD="${KEYCLOAK_ADMIN_PASSWORD:-admin}"
+KEYCLOAK_TEST_USER="${KEYCLOAK_TEST_USER:-walletuser@example.org}"
+KEYCLOAK_TEST_PASSWORD="${KEYCLOAK_TEST_PASSWORD:-walletpass}"
+# In-cluster base URL a service uses to reach Keycloak; the browser/gateway path is /keycloak.
+KEYCLOAK_INTERNAL_URL="${KEYCLOAK_INTERNAL_URL:-http://keycloak.keycloak.svc.cluster.local:8080}"
+
 # Homebrew paths are macOS-only; guard them so Linux does not shell out to a missing `brew`.
 [ "$(uname)" = Darwin ] && export PATH="/opt/homebrew/bin:$PATH"
 export NO_PROXY="0.0.0.0,127.0.0.1,localhost,::1,.svc,.cluster.local"
@@ -70,7 +81,23 @@ warn() { echo "${c_ylw}⚠ $*${c_off}" >&2; }
 die()  { echo "${c_red}✖ $*${c_off}" >&2; exit 1; }
 
 # Every domain up.sh downloads from, named in the block hint below.
-NET_HINT_DOMAINS="registry-1.docker.io auth.docker.io app.getambassador.io datawire-static-files.s3.amazonaws.com registry.npmjs.org registry.yarnpkg.com"
+NET_HINT_DOMAINS="registry-1.docker.io auth.docker.io quay.io app.getambassador.io datawire-static-files.s3.amazonaws.com registry.npmjs.org registry.yarnpkg.com"
+
+# The registry host to probe for a given image ref. Docker grammar: the first path segment is a
+# registry ONLY when a slash follows it AND it carries a dot or colon (or is `localhost`); a bare
+# `name[:tag]` (no slash) is Docker Hub even though its tag holds a colon. Lets net_check_die report
+# the RIGHT host on a blocked pull (e.g. quay.io for the Keycloak image), not always Hub.
+image_registry_host() {   # $1 = image ref -> registry host
+  case "$1" in
+    */*)
+      local first="${1%%/*}"
+      case "$first" in
+        localhost|*.*|*:*) printf '%s' "$first" ;;
+        *)                 printf 'registry-1.docker.io' ;;
+      esac ;;
+    *) printf 'registry-1.docker.io' ;;   # no slash => bare Docker Hub image (name[:tag])
+  esac
+}
 # Firewall-block diagnosis. The sandbox proxy answers a policy-blocked host with HTTP 403 and a
 # body that starts "Blocked by network policy: …"; docker/kubectl/helm/npm all swallow that body,
 # so a hard block looks like a transient/proxy failure. When a download fails we re-probe the host
@@ -133,7 +160,7 @@ ensure_image() {   # pull on host (retry transient EOF) if absent, then load int
       docker pull "$img" >/dev/null 2>&1 && break
       # A firewall block is deterministic and won't clear on retry, detect it on the first failed
       # attempt and fail fast with the real cause instead of spending the whole retry budget.
-      [ "$i" = 1 ]  && net_check_die "docker pull $img" registry-1.docker.io
+      [ "$i" = 1 ]  && net_check_die "docker pull $img" "$(image_registry_host "$img")"
       [ "$i" = 10 ] && die "docker pull $img failed after 10 attempts (transient registry error, rerun, or check: docker pull $img)"
       info "pull $img: retry $i"; sleep 5
     done

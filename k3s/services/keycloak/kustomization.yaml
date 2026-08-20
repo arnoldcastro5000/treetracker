@@ -1,0 +1,13 @@
+# Overlay for the keycloak tier: the Deployment/Service/Namespace plus the realm import as a
+# ConfigMap generated from realm-treetracker.json (mounted at /opt/keycloak/data/import).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - keycloak.yaml
+configMapGenerator:
+  - name: keycloak-realm
+    namespace: keycloak
+    files:
+      - treetracker-realm.json=realm-treetracker.json
+generatorOptions:
+  disableNameSuffixHash: true
