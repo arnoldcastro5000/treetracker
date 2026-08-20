@@ -1,0 +1,25 @@
+# Stand-up adapter: the wallet-app subsystem (web SPA + apps/user backend + legacy wallet-api +
+# shared Keycloak). Child map `wallet-app stands up as a self-contained local subsystem`.
+#
+# INCREMENTAL: this is the FOUNDATION slice (dedicated DB + wallet-api migrations + queue plumbing +
+# api_key seed + object-storage bucket + the Keycloak confidential client). The service slice (the
+# three images, overlay, waitFor, verify) is authored next; until then the adapter is optIn so a bare
+# `up.sh` skips it. Bring the foundation up with: ./k3s/up.sh wallet-app
+name: wallet-app
+optIn: true
+# Backing tiers this subsystem needs (identity 05 / data 04 / ingress 06 / object storage 07).
+# NOT capture (wallet-app decision 01). keycloak + localstack are conditional tiers pulled in here.
+dependsOn: [postgres, gateway, keycloak, localstack]
+# Dedicated wallet-app database (data-stores decision 04): wallet-api tables in schema `wallet`,
+# apps/user's queue.message plumbing in schema `queue`, both inside this one database.
+databases: [wallet_app]
+# Dedicated images bucket (wallet-api writes wallet cover/logo images here; served via the shared
+# /s3 read-base). One region eu-central-1 (object-storage decision 07).
+objectStorage:
+  buckets:
+    - ${WALLET_IMAGES_BUCKET}
+hooks:
+  # provision schemas + queue plumbing + run wallet-api migrations + seed the dummy api_key row
+  pre: k3s/services/wallet-app/hooks/migrate.sh
+  # ensure the wallet-app Keycloak confidential client + its service-account role (decision 02)
+  post: k3s/services/wallet-app/hooks/keycloak-client.sh

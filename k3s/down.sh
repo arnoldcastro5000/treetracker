@@ -45,6 +45,7 @@ done
 # kill any lingering host-side port-forwards
 pkill -f "port-forward svc/postgres" 2>/dev/null || true
 pkill -f "port-forward svc/treetracker-admin-client" 2>/dev/null || true
+pkill -f "port-forward svc/keycloak" 2>/dev/null || true
 
 delete_namespaces() {
   # SAFETY: never delete namespaces on a non-local cluster (e.g. the real dev cluster)

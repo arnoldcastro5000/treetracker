@@ -13,6 +13,9 @@ NODE="${K3D_NODE:-k3d-${CLUSTER}-server-0}"   # the k3d server container (for co
 IMAGE_REGISTRY="${IMAGE_REGISTRY:-}"          # ci: registry to push to; empty ⇒ k3d image import
 REBUILD="${REBUILD:-0}"                        # 1 (or --rebuild) ⇒ build even if the image is already present
 DISK_WARN_PCT="${DISK_WARN_PCT:-80}"          # warn (only) before a build once the Docker disk is this full
+# Deployment rollout wait. Must be >= the slowest legitimate first-boot (Keycloak's startupProbe budget
+# is 300s: Liquibase + realm import on a cold Postgres), so a slow-but-healthy start is not failed.
+ROLLOUT_TIMEOUT="${ROLLOUT_TIMEOUT:-300}"
 
 # TT_ROOT = the treetracker repo root; K3S_DIR = its k3s/ dir. Derived from this file's location
 # (k3s/lib/) unless the caller already exported them.
@@ -60,6 +63,14 @@ KEYCLOAK_TEST_USER="${KEYCLOAK_TEST_USER:-walletuser@example.org}"
 KEYCLOAK_TEST_PASSWORD="${KEYCLOAK_TEST_PASSWORD:-walletpass}"
 # In-cluster base URL a service uses to reach Keycloak; the browser/gateway path is /keycloak.
 KEYCLOAK_INTERNAL_URL="${KEYCLOAK_INTERNAL_URL:-http://keycloak.keycloak.svc.cluster.local:8080}"
+
+# Wallet-app subsystem (dedicated DB, wallet-api schema `wallet` + queue plumbing; its own Keycloak
+# confidential client; dedicated images bucket). All secrets are LOCAL DUMMY literals.
+WALLET_APP_DB="${WALLET_APP_DB:-wallet_app}"
+WALLET_IMAGES_BUCKET="${WALLET_IMAGES_BUCKET:-treetracker-local-wallet-images}"
+KEYCLOAK_WALLET_CLIENT_ID="${KEYCLOAK_WALLET_CLIENT_ID:-wallet-app-user-dev-svc}"
+KEYCLOAK_WALLET_CLIENT_SECRET="${KEYCLOAK_WALLET_CLIENT_SECRET:-wallet-app-dev-secret}"
+WALLET_API_KEY="${WALLET_API_KEY:-FORTESTFORTESTFORTESTFORTESTFORTEST}"
 
 # Homebrew paths are macOS-only; guard them so Linux does not shell out to a missing `brew`.
 [ "$(uname)" = Darwin ] && export PATH="/opt/homebrew/bin:$PATH"
@@ -245,7 +256,7 @@ finish_deploy() {   # $1 ns  $2 deploy  $3 force-roll(0|1: rebuilt image or chan
     info "$dep: $why -> rollout restart"
     k -n "$ns" rollout restart "deploy/$dep" >/dev/null 2>&1 || true
   fi
-  k -n "$ns" rollout status "deploy/$dep" --timeout=180s
+  k -n "$ns" rollout status "deploy/$dep" --timeout="${ROLLOUT_TIMEOUT}s"
 }
 
 # ── node / db-migrate ─────────────────────────────────────────────────────────
