@@ -1,0 +1,22 @@
+# Shared object read-base (wallet ticket 06 / capture ticket 17). ONE gateway route that serves
+# every local bucket by path-style S3 GET, so a stored object's locally-resolvable URL is
+#   http://localhost:8088/s3/<bucket>/<key>
+# LocalStack runs as a HOST container on :4566 (not a cluster workload), so this Mapping targets it
+# as an external upstream via host.k3d.internal (coredns-custom maps that name to the host gateway).
+# `/s3/<bucket>/<key>` rewrites to `/<bucket>/<key>`, which is the LocalStack path-style S3 key URL.
+# This pins capture ticket 17's <path> placeholder to /s3.
+# The object-storage namespace is declared by the adapter (standalone.yaml `namespaces:`), so the
+# orchestrator ensures it before this overlay applies; it is not re-declared here.
+apiVersion: getambassador.io/v3alpha1
+kind: Mapping
+metadata:
+  name: s3-read-base
+  namespace: object-storage
+spec:
+  hostname: '*'
+  prefix: /s3/
+  rewrite: /
+  # External upstream: the host-side LocalStack. Precedence beats the admin-client catch-all `/`.
+  service: host.k3d.internal:4566
+  host_rewrite: host.k3d.internal
+  timeout_ms: 30000

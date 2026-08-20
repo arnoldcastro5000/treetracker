@@ -1,0 +1,6 @@
+# Overlay for the localstack adapter: the shared /s3 object read-base gateway Mapping. LocalStack
+# itself is a host container brought up by hooks/up.sh; only this Mapping is a cluster resource.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - s3-mapping.yaml

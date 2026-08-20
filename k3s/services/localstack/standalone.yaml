@@ -6,6 +6,10 @@
 # provisions them idempotently in one region (eu-central-1).
 name: localstack
 tier: conditional
+# The /s3 read-base Mapping is a gateway CRD, so the gateway (Emissary CRDs) must be up first.
+dependsOn: [gateway]
+namespaces: [object-storage]
+overlay: k3s/services/localstack
 hooks:
   up: k3s/services/localstack/hooks/up.sh
   down: k3s/services/localstack/hooks/down.sh
