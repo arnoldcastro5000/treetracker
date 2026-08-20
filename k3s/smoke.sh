@@ -9,24 +9,17 @@
 # kube-context points elsewhere.
 set -uo pipefail
 
-CLUSTER="${CLUSTER:-greenstand}"
-CONTEXT="${KUBE_CONTEXT:-k3d-$CLUSTER}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$SCRIPT_DIR/lib/e2e-lib.sh"   # k/ok/bad/psq/uuid/num + pack_json (shared with route2-two-file-test.sh)
+
 GW="${GATEWAY_URL:-http://localhost:8088}"
 ADMIN_USER="${ADMIN_USER:-test}"
 ADMIN_PASSWORD="${ADMIN_PASSWORD:-ieVyaGqyMX}"
-
-k()   { kubectl --context "$CONTEXT" "$@"; }
-PASS=0; FAIL=0
-ok()  { echo "  PASS  $*"; PASS=$((PASS+1)); }
-bad() { echo "  FAIL  $*"; FAIL=$((FAIL+1)); }
-psq() { k exec -n data deploy/postgres -- psql -qtAX -U postgres -d "$1" -c "$2" 2>&1; }
 
 # Preflight: required tooling + the k3d context must exist (fail loud, not mid-test).
 command -v jq >/dev/null 2>&1 || { echo "FATAL: jq not found (brew install jq / apt-get install -y jq)"; exit 2; }
 kubectl config get-contexts "$CONTEXT" >/dev/null 2>&1 || { echo "FATAL: kube context '$CONTEXT' not found"; exit 2; }
 
-# UUIDs: uuidgen is native on macOS, absent in some Linux sandboxes; fall back to python3.
-uuid() { if command -v uuidgen >/dev/null 2>&1; then uuidgen | tr 'A-Z' 'a-z'; else python3 -c 'import uuid;print(uuid.uuid4())'; fi; }
 # BSD tr dies ("Illegal byte sequence") on non-UTF8 bytes from /dev/urandom under a UTF-8
 # locale; force the C locale for the byte-filtering.
 FP="e2e-$(date +%s)-$(LC_ALL=C tr -dc a-z0-9 </dev/urandom | head -c6)"
@@ -91,22 +84,8 @@ for spec in "data_pipeline:public.bulk_tree_upload" "treetracker:field_data.raw_
 done
 
 echo "== 6. inject forged bulk-pack row (bypasses Cognito/S3/SQS)"
-BULK=$(jq -nc --arg wr "$WR_ID" --arg dc "$DC_ID" --arg s "$SES_ID" --arg c "$CAP_ID" \
-  --arg fp "$FP" --arg now "$NOW" --arg w "$WALLET" --arg ph "$PHONE" '{
-  pack_format_version:"2", device_id:"smoketest0000001",
-  wallet_registrations:[{id:$wr,wallet:$w,first_name:"Smoke",last_name:"Test",
-    phone:$ph,email:null,lat:0.5385,lon:33.1592,
-    user_photo_url:"https://example.invalid/u.jpg",registered_at:$now}],
-  device_configurations:[{id:$dc,device_identifier:"smoketest0000001",brand:"generic",model:"sandbox",
-    device:"sandbox",serial:"SMOKE1",hardware:"virtual",manufacturer:"greenstand",app_build:1,
-    app_version:"0.0.0-smoke",os_version:"14",sdk_version:34,logged_at:$now}],
-  sessions:[{id:$s,device_configuration_id:$dc,originating_wallet_registration_id:$wr,
-    organization:null,target_wallet:$w,check_in_photo_url:"https://example.invalid/c.jpg",
-    track_url:"https://example.invalid/track.json",start_time:$now}],
-  captures:[{id:$c,session_id:$s,image_url:"https://example.invalid/t.jpg",lat:0.5385,lon:33.1592,
-    gps_accuracy:5,note:$fp,abs_step_count:null,delta_step_count:null,rotation_matrix:null,
-    extra_attributes:null,captured_at:$now}],
-  tracks:null, messages:null, registrations:null, trees:null}')
+# The combined pack (registrations + session + capture) from the shared builder, reg=1 cap=1.
+BULK=$(pack_json "$WR_ID" "$DC_ID" "$SES_ID" "$CAP_ID" "$WALLET" "$PHONE" "$NOW" "$FP" 1 1)
 # psql -c takes a single SQL statement and no backslash meta-commands, so stream the
 # INSERT over stdin. bulk_data is dollar-quoted ($j$) - jq -c never emits that token.
 INS=$(printf "insert into public.bulk_tree_upload (key,bucket_arn,event_time,bulk_data,processed)
