@@ -1,15 +1,17 @@
 # Stand-up adapter: the wallet-app subsystem (web SPA + apps/user backend + legacy wallet-api +
 # shared Keycloak). Child map `wallet-app stands up as a self-contained local subsystem`.
 #
-# INCREMENTAL: this is the FOUNDATION slice (dedicated DB + wallet-api migrations + queue plumbing +
-# api_key seed + object-storage bucket + the Keycloak confidential client). The service slice (the
-# three images, overlay, waitFor, verify) is authored next; until then the adapter is optIn so a bare
-# `up.sh` skips it. Bring the foundation up with: ./k3s/up.sh wallet-app
+# INCREMENTAL: FOUNDATION (dedicated DB + wallet-api migrations + queue plumbing + api_key seed +
+# object-storage bucket + the Keycloak confidential client + the shared browser-flow seed) PLUS the
+# wallet-api SERVICE (image + overlay + Mapping /wallet/v2/ + verify). apps/user + apps/web are a later
+# slice, so the adapter stays optIn (a bare `up.sh` skips it). Bring it up with: ./k3s/up.sh wallet-app
 name: wallet-app
 optIn: true
 # Backing tiers this subsystem needs (identity 05 / data 04 / ingress 06 / object storage 07).
 # NOT capture (wallet-app decision 01). keycloak + localstack are conditional tiers pulled in here.
 dependsOn: [postgres, gateway, keycloak, localstack]
+namespaces:
+  - wallet-api
 # Dedicated wallet-app database (data-stores decision 04): wallet-api tables in schema `wallet`,
 # apps/user's queue.message plumbing in schema `queue`, both inside this one database.
 databases: [wallet_app]
@@ -18,6 +20,41 @@ databases: [wallet_app]
 objectStorage:
   buckets:
     - ${WALLET_IMAGES_BUCKET}
+# Local dummy Secrets the wallet-api base Deployment references (never real creds). The wallet-api DB
+# is the dedicated wallet_app DB with search_path=wallet; JWT keys are unused under the Keycloak-auth
+# path (defaulted to '' in code) but the secret must exist for the pod to start; S3 points at LocalStack.
+secrets:
+  - namespace: wallet-api
+    name: treetracker-api-database-connection
+    literals:
+      db: postgresql://postgres:postgres@postgres.data.svc.cluster.local:5432/${WALLET_APP_DB}
+      schema: wallet
+  - namespace: wallet-api
+    name: treetracker-wallet-jwt-keys
+    literals:
+      private-key: local-unused
+      public-key: local-unused
+  - namespace: wallet-api
+    name: aws-s3
+    literals:
+      s3_bucket: ${WALLET_IMAGES_BUCKET}
+      s3_region: ${OBJECT_STORAGE_REGION}
+      s3_access_key_id: test
+      s3_secret_access_key: test
+# The wallet-api service image (node16 Express). Built from the submodule with its own Dockerfile;
+# HELD submodule code (endpoint-aware S3, IMAGE_READ_BASE, Keycloak-JWKS auth) is baked in at build.
+images:
+  - name: wallet-api
+    context: treetracker-wallet-api
+# Local overlay: wallet-api base + local image/secrets/env (see kustomization.yaml).
+overlay: k3s/services/wallet-app
+# Roll the wallet-api Deployment before the verify gate.
+waitFor:
+  - namespace: wallet-api
+    deployment: treetracker-wallet-api-v2
+    image: wallet-api:local
+# Hard gate: a Keycloak-bearer + api-key GET /wallet/v2/wallets returns the seeded caller wallet.
+verify: k3s/services/wallet-app/verify.sh
 hooks:
   # provision schemas + queue plumbing + run wallet-api migrations + seed the dummy api_key row
   pre: k3s/services/wallet-app/hooks/migrate.sh
