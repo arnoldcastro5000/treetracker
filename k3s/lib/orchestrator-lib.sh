@@ -86,6 +86,9 @@ WALLET_SEED_B_NAME="${WALLET_SEED_B_NAME:-Kikonda School}"
 WALLET_SEED_C_EMAIL="${WALLET_SEED_C_EMAIL:-wallet-c@example.org}"
 WALLET_SEED_C_NAME="${WALLET_SEED_C_NAME:-Masaka Co-op}"
 WALLET_SEED_C_TOKENS="${WALLET_SEED_C_TOKENS:-20}"
+# The post-up pending transfer C -> B (no trust, so it lands pending). Created via the REAL API once
+# wallet-api runs (pending-transfer-accept map). C keeps tokens for the later trust-payoff send.
+WALLET_SEED_PENDING_AMOUNT="${WALLET_SEED_PENDING_AMOUNT:-5}"
 
 # Homebrew paths are macOS-only; guard them so Linux does not shell out to a missing `brew`.
 [ "$(uname)" = Darwin ] && export PATH="/opt/homebrew/bin:$PATH"

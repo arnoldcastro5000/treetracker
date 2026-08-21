@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# post hook (step 2 of 2, after keycloak-client.sh): seed the shared BROWSER-FLOW fixtures the three
-# wallet maps need (deeper-wallet-flows, pending-transfer-accept, wallet-trust-management). Idempotent.
+# post hook (step 2 of 3, after keycloak-client.sh, before seed-pending-transfer.sh): seed the shared
+# BROWSER-FLOW fixtures the three wallet maps need (deeper-wallet-flows, pending-transfer-accept,
+# wallet-trust-management). Idempotent.
 #
 # Seeds THREE realm users A/B/C and their wallets, with wallet.id == the Keycloak `sub` (identity
 # decision: the wallet-api LOCAL JWKS branch sets req.wallet_id = decoded.sub). Keycloak 26 IGNORES a
@@ -9,9 +10,9 @@
 # (bumped: the seeded pending transfer + the trust-payoff send). Trust seeded ONLY A -> B (send,
 # trusted) so A -> B auto-completes while C -> B stays untrusted (lands pending).
 #
-# NOT seeded here (deferred to the service slice, which needs a RUNNING wallet-api): the post-up
-# authenticated `POST /transfers` C -> B that creates the pending transfer, and the trust-payoff send.
-# This hook only lays the wallets/tokens/trust the API and the browser build on.
+# This hook lays only the wallets/tokens/trust (SQL + Keycloak). The pending C -> B transfer is created
+# via the REAL running wallet-api by step 3 (seed-pending-transfer.sh); the trust-payoff send is a
+# browser flow (a later slice).
 #
 # Talks to Keycloak over a short-lived port-forward (mirrors keycloak-client.sh) and to Postgres via
 # the shared start_pf/stop_pf (mirrors migrate.sh). JSON via node (a hard orchestrator dependency).
