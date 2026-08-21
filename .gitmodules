@@ -1,48 +1,48 @@
 [submodule "treetracker-wallet-app"]
 	path = treetracker-wallet-app
-	url = git@github.com:Amaanfaiz/treetracker-wallet-app.git
+	url = https://github.com/Amaanfaiz/treetracker-wallet-app.git
 [submodule "treetracker-database"]
 	path = treetracker-database
-	url = git@github.com:Greenstand/treetracker-database.git
+	url = https://github.com/Greenstand/treetracker-database.git
 [submodule "treetracker-infrastructure"]
 	path = treetracker-infrastructure
-	url = git@github.com:Greenstand/treetracker-infrastructure.git
+	url = https://github.com/Greenstand/treetracker-infrastructure.git
 [submodule "treetracker-admin-client"]
 	path = treetracker-admin-client
-	url = git@github.com:Greenstand/treetracker-admin-client.git
+	url = https://github.com/Greenstand/treetracker-admin-client.git
 [submodule "treetracker-android"]
 	path = treetracker-android
 	url = https://github.com/arnoldcastro5000/treetracker-android.git
 [submodule "treetracker-web-map-client"]
 	path = treetracker-web-map-client
-	url = git@github.com:Greenstand/treetracker-web-map-client.git
+	url = https://github.com/Greenstand/treetracker-web-map-client.git
 [submodule "treetracker-admin-api"]
 	path = treetracker-admin-api
-	url = git@github.com:Greenstand/treetracker-admin-api.git
+	url = https://github.com/Greenstand/treetracker-admin-api.git
 [submodule "treetracker-wallet-api"]
 	path = treetracker-wallet-api
 	url = https://github.com/arnoldcastro5000/treetracker-wallet-api.git
 [submodule "treetracker-query-api"]
 	path = treetracker-query-api
-	url = git@github.com:Greenstand/treetracker-query-api.git
+	url = https://github.com/Greenstand/treetracker-query-api.git
 [submodule "bulk-pack-transformer-v2"]
 	path = bulk-pack-transformer-v2
-	url = git@github.com:Greenstand/bulk-pack-transformer-v2.git
+	url = https://github.com/Greenstand/bulk-pack-transformer-v2.git
 [submodule "bulk-pack-processor"]
 	path = bulk-pack-processor
-	url = git@github.com:Greenstand/bulk-pack-processor.git
+	url = https://github.com/Greenstand/bulk-pack-processor.git
 [submodule "bulk-pack-transformer"]
 	path = bulk-pack-transformer
-	url = git@github.com:Greenstand/bulk-pack-transformer.git
+	url = https://github.com/Greenstand/bulk-pack-transformer.git
 [submodule "treetracker-field-data"]
 	path = treetracker-field-data
-	url = git@github.com:Greenstand/treetracker-field-data.git
+	url = https://github.com/Greenstand/treetracker-field-data.git
 [submodule "bulk-pack-consumer"]
 	path = bulk-pack-consumer
 	url = https://github.com/arnoldcastro5000/bulk-pack-consumer.git
 [submodule "treetracker-api"]
 	path = treetracker-api
-	url = git@github.com:Greenstand/treetracker-api.git
+	url = https://github.com/Greenstand/treetracker-api.git
 [submodule "images-api"]
 	path = images-api
-	url = git@github.com:Greenstand/images-api.git
+	url = https://github.com/Greenstand/images-api.git
