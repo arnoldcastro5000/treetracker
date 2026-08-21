@@ -36,6 +36,11 @@ RUN yarn workspaces focus web core @treetracker/wallet @treetracker/config
 # NEXT_PUBLIC_* are inlined at build time. The browser calls /user-api (apps/user) same-origin via the
 # gateway, so a relative base needs no host.
 ENV NEXT_PUBLIC_WALLET_APP_API=/user-api
+# The browser calls wallet-api same-origin at the gateway /wallet/v2 Mapping, sending BOTH the Keycloak
+# Bearer (from the session token) AND the treetracker-api-key header (the auth AND-chain). The api-key
+# here is the LOCAL dummy seeded into the wallet_app api_key table; it is not a production secret.
+ENV NEXT_PUBLIC_TREETRACKER_API=/wallet/v2
+ENV NEXT_PUBLIC_WALLET_API_KEY=FORTESTFORTESTFORTESTFORTESTFORTEST
 RUN yarn workspace web build
 
 # nginx serves ONLY the static export; Emissary handles /wallet -> / and all API routing.
