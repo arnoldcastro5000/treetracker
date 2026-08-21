@@ -21,7 +21,7 @@
 	url = git@github.com:Greenstand/treetracker-admin-api.git
 [submodule "treetracker-wallet-api"]
 	path = treetracker-wallet-api
-	url = git@github.com:Greenstand/treetracker-wallet-api.git
+	url = https://github.com/arnoldcastro5000/treetracker-wallet-api.git
 [submodule "treetracker-query-api"]
 	path = treetracker-query-api
 	url = git@github.com:Greenstand/treetracker-query-api.git
@@ -39,7 +39,7 @@
 	url = git@github.com:Greenstand/treetracker-field-data.git
 [submodule "bulk-pack-consumer"]
 	path = bulk-pack-consumer
-	url = git@github.com:Greenstand/bulk-pack-consumer.git
+	url = https://github.com/arnoldcastro5000/bulk-pack-consumer.git
 [submodule "treetracker-api"]
 	path = treetracker-api
 	url = git@github.com:Greenstand/treetracker-api.git
