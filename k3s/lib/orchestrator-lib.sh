@@ -72,6 +72,21 @@ KEYCLOAK_WALLET_CLIENT_ID="${KEYCLOAK_WALLET_CLIENT_ID:-wallet-app-user-dev-svc}
 KEYCLOAK_WALLET_CLIENT_SECRET="${KEYCLOAK_WALLET_CLIENT_SECRET:-wallet-app-dev-secret}"
 WALLET_API_KEY="${WALLET_API_KEY:-FORTESTFORTESTFORTESTFORTESTFORTEST}"
 
+# Shared browser-flow seed fixtures (the three wallet maps: deeper-wallet-flows, pending-transfer-accept,
+# wallet-trust-management). THREE realm users A/B/C, each with wallet.id == its Keycloak sub (Keycloak 26
+# ignores a client-supplied id, so the seed reads the sub back and adopts it). Tokens on A (send-loop)
+# and on C (bumped: the seeded pending transfer + the trust-payoff send). Trust seeded ONLY A -> B.
+# B reuses the shared realm test user so the login path stays continuous with the client verify.
+WALLET_SEED_PASSWORD="${WALLET_SEED_PASSWORD:-$KEYCLOAK_TEST_PASSWORD}"
+WALLET_SEED_A_EMAIL="${WALLET_SEED_A_EMAIL:-wallet-a@example.org}"
+WALLET_SEED_A_NAME="${WALLET_SEED_A_NAME:-Buwagi Grower}"
+WALLET_SEED_A_TOKENS="${WALLET_SEED_A_TOKENS:-20}"
+WALLET_SEED_B_EMAIL="${WALLET_SEED_B_EMAIL:-$KEYCLOAK_TEST_USER}"
+WALLET_SEED_B_NAME="${WALLET_SEED_B_NAME:-Kikonda School}"
+WALLET_SEED_C_EMAIL="${WALLET_SEED_C_EMAIL:-wallet-c@example.org}"
+WALLET_SEED_C_NAME="${WALLET_SEED_C_NAME:-Masaka Co-op}"
+WALLET_SEED_C_TOKENS="${WALLET_SEED_C_TOKENS:-20}"
+
 # Homebrew paths are macOS-only; guard them so Linux does not shell out to a missing `brew`.
 [ "$(uname)" = Darwin ] && export PATH="/opt/homebrew/bin:$PATH"
 export NO_PROXY="0.0.0.0,127.0.0.1,localhost,::1,.svc,.cluster.local"

@@ -21,5 +21,6 @@ objectStorage:
 hooks:
   # provision schemas + queue plumbing + run wallet-api migrations + seed the dummy api_key row
   pre: k3s/services/wallet-app/hooks/migrate.sh
-  # ensure the wallet-app Keycloak confidential client + its service-account role (decision 02)
-  post: k3s/services/wallet-app/hooks/keycloak-client.sh
+  # 1. ensure the Keycloak confidential client (decision 02); 2. seed the shared browser-flow fixtures
+  # (users A/B/C + wallets + tokens + trust A->B). See hooks/post.sh.
+  post: k3s/services/wallet-app/hooks/post.sh
