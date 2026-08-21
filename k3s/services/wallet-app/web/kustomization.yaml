@@ -1,0 +1,11 @@
+# apps/web overlay: the Next 14 static SPA served by nginx at /wallet. The submodule ships no
+# deployment/base, so these manifests are authored here. The image (wallet-web:local) is built by
+# web.Dockerfile; NEXT_PUBLIC_* are baked at build time, so no runtime env/Secret is needed.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: wallet-web
+resources:
+  - namespace.yaml
+  - deployment.yaml
+  - service.yaml
+  - mapping.yaml

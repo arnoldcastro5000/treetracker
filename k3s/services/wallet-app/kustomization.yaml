@@ -2,9 +2,10 @@
 # namespace is set here (that would force both services into one namespace).
 #  - wallet-api/ : the legacy wallet-api service (namespace wallet-api)
 #  - user/       : apps/user, the NestJS user-api (namespace treetracker-wallet-monorepo-user-api)
-# apps/web is a later slice.
+#  - web/        : apps/web, the Next 14 static SPA served by nginx (namespace wallet-web)
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
   - wallet-api
   - user
+  - web

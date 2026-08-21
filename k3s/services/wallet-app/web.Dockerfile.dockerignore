@@ -1,0 +1,9 @@
+# Keep the host's node_modules and build output out of the apps/web build context (monorepo root).
+# BuildKit reads this dockerfile-specific ignore file in preference to a context-root one.
+node_modules
+**/node_modules
+.git
+**/.next
+**/out
+**/dist
+**/.turbo

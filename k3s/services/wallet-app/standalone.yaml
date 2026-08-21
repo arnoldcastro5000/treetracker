@@ -4,8 +4,9 @@
 # INCREMENTAL: FOUNDATION (dedicated DB + wallet-api migrations + queue plumbing + api_key seed +
 # object-storage bucket + the Keycloak confidential client + the shared browser-flow seed) PLUS the
 # wallet-api SERVICE (image + overlay + Mapping /wallet/v2/ + verify) PLUS apps/user (the NestJS
-# user-api: image + overlay + Mapping /user-api/ + login/healthz verify). apps/web is a later slice, so
-# the adapter stays optIn (a bare `up.sh` skips it). Bring it up with: ./k3s/up.sh wallet-app
+# user-api: image + overlay + Mapping /user-api/ + login/healthz verify) PLUS apps/web (the Next 14
+# static SPA: nginx image + overlay + Mapping /wallet + SPA verify). The adapter stays optIn (a bare
+# `up.sh` skips it). Bring it up with: ./k3s/up.sh wallet-app
 name: wallet-app
 optIn: true
 # Backing tiers this subsystem needs (identity 05 / data 04 / ingress 06 / object storage 07).
@@ -14,6 +15,7 @@ dependsOn: [postgres, gateway, keycloak, localstack]
 namespaces:
   - wallet-api
   - treetracker-wallet-monorepo-user-api
+  - wallet-web
 # Dedicated wallet-app database (data-stores decision 04): wallet-api tables in schema `wallet`,
 # apps/user's queue.message plumbing in schema `queue`, both inside this one database.
 databases: [wallet_app]
@@ -66,6 +68,13 @@ images:
   - name: wallet-user
     context: treetracker-wallet-app
     dockerfile: k3s/services/wallet-app/user.Dockerfile
+  # apps/web (Next 14 static SPA): static-export build from the monorepo ROOT, served by nginx at
+  # /wallet. nginx.conf comes from the localdeploy build context.
+  - name: wallet-web
+    context: treetracker-wallet-app
+    dockerfile: k3s/services/wallet-app/web.Dockerfile
+    extraContexts:
+      localdeploy: k3s/services/wallet-app/web
 # Local overlay: wallet-api base + local image/secrets/env (see kustomization.yaml).
 overlay: k3s/services/wallet-app
 # Roll the wallet-api Deployment before the verify gate.
@@ -76,6 +85,9 @@ waitFor:
   - namespace: treetracker-wallet-monorepo-user-api
     deployment: treetracker-wallet-monorepo-user-api
     image: wallet-user:local
+  - namespace: wallet-web
+    deployment: wallet-web
+    image: wallet-web:local
 # Hard gate: a Keycloak-bearer + api-key GET /wallet/v2/wallets returns the seeded caller wallet.
 verify: k3s/services/wallet-app/verify.sh
 hooks:

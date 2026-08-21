@@ -1,0 +1,12 @@
+# Serve the SPA at /wallet. rewrite / strips the prefix so nginx serves the export from root
+# (/wallet -> /, /wallet/login -> /login, /wallet/_next/... -> /_next/...). Emissary longest-prefix
+# precedence keeps /wallet/v2/ (wallet-api) ahead of this shorter /wallet prefix.
+apiVersion: getambassador.io/v2
+kind: Mapping
+metadata:
+  name: wallet-web
+  namespace: wallet-web
+spec:
+  prefix: /wallet
+  rewrite: /
+  service: wallet-web-service.wallet-web

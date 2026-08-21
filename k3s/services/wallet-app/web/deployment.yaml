@@ -1,0 +1,29 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wallet-web
+  namespace: wallet-web
+  labels:
+    app: wallet-web
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: wallet-web
+  template:
+    metadata:
+      labels:
+        app: wallet-web
+    spec:
+      containers:
+        - name: wallet-web
+          image: wallet-web:local
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 80
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 2
+            periodSeconds: 5

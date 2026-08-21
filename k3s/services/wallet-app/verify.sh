@@ -65,4 +65,27 @@ BADPW=$(curl -s -m15 -o /dev/null -w '%{http_code}' -X POST "$GW/user-api/login"
   -d "{\"username\":\"$WALLET_SEED_B_EMAIL\",\"password\":\"definitely-wrong\"}")
 [ "$BADPW" != 200 ] || die "login with a wrong password still returned 200 (login not really authenticating)"
 rm -f "$LBODY"
-info "apps/user verify GREEN (healthz 200; login -> access_token; wrong password -> $BADPW)"
+# register path reachability (idempotent): POST an already-seeded user, so no new user is created;
+# assert the /user-api/register route reaches apps/user through the gateway (not a gateway 404/5xx).
+RCODE=$(curl -s -m15 -o /dev/null -w '%{http_code}' -X POST "$GW/user-api/register" \
+  -H 'Content-Type: application/json' \
+  -d "{\"username\":\"$WALLET_SEED_B_EMAIL\",\"email\":\"$WALLET_SEED_B_EMAIL\",\"password\":\"$WALLET_SEED_PASSWORD\"}")
+case "$RCODE" in
+  000|404|501|502|503|504) die "POST /user-api/register -> $RCODE (register route not reachable via the gateway)";;
+esac
+info "apps/user verify GREEN (healthz 200; login -> access_token; wrong password -> $BADPW; register route reachable -> $RCODE)"
+
+# --- apps/web (the Next 14 static SPA) through the gateway /wallet Mapping ---
+log "wallet-app verify: apps/web static SPA at /wallet"
+WBODY=$(mktemp)
+# the SPA entry and the login page must both serve the export shell (proves basePath routing + nginx)
+WROOT=$(curl -s -m10 -o "$WBODY" -w '%{http_code}' "$GW/wallet/login")
+[ "$WROOT" = 200 ] || die "GET /wallet/login -> $WROOT (expected 200); body: $(head -c 300 "$WBODY")"
+grep -qi "<!doctype html" "$WBODY" || die "/wallet/login did not serve an HTML document; body: $(head -c 300 "$WBODY")"
+# a hashed _next asset referenced by the page must load through the /wallet asset prefix
+ASSET=$(grep -oE "/wallet/_next/[^\"']+\.js" "$WBODY" | head -1)
+[ -n "$ASSET" ] || die "/wallet/login references no /wallet/_next asset (basePath not applied)"
+ACODE=$(curl -s -m10 -o /dev/null -w '%{http_code}' "$GW$ASSET")
+[ "$ACODE" = 200 ] || die "GET $ASSET -> $ACODE (expected 200); _next asset serving broken"
+rm -f "$WBODY"
+info "apps/web verify GREEN (/wallet/login 200 HTML; /wallet/_next asset 200)"
