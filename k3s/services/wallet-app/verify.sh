@@ -47,3 +47,22 @@ NOBEARER=$(curl -s -m10 -o /dev/null -w '%{http_code}' -H "treetracker-api-key: 
 rm -f "$BODY"
 info "auth gates enforced (api-key -> $NOKEY, bearer -> $NOBEARER without credentials)"
 info "wallet-api service verify GREEN"
+
+# --- apps/user (the NestJS user-api) through the gateway /user-api/ Mapping ---
+log "wallet-app verify: apps/user healthz + login (Keycloak password grant server-side)"
+HZ=$(curl -s -m10 -o /dev/null -w '%{http_code}' "$GW/user-api/healthz")
+[ "$HZ" = 200 ] || die "GET /user-api/healthz -> $HZ (expected 200)"
+LBODY=$(mktemp)
+LCODE=$(curl -s -m15 -o "$LBODY" -w '%{http_code}' -X POST "$GW/user-api/login" \
+  -H 'Content-Type: application/json' \
+  -d "{\"username\":\"$WALLET_SEED_B_EMAIL\",\"password\":\"$WALLET_SEED_PASSWORD\"}")
+[ "$LCODE" = 200 ] || die "POST /user-api/login -> $LCODE (expected 200); body: $(head -c 400 "$LBODY")"
+UTOK=$(jn 'd&&d.access_token' <"$LBODY")
+[ -n "$UTOK" ] || die "login returned no access_token; body: $(head -c 400 "$LBODY")"
+# a wrong password must NOT return 200 (the login path really reaches Keycloak)
+BADPW=$(curl -s -m15 -o /dev/null -w '%{http_code}' -X POST "$GW/user-api/login" \
+  -H 'Content-Type: application/json' \
+  -d "{\"username\":\"$WALLET_SEED_B_EMAIL\",\"password\":\"definitely-wrong\"}")
+[ "$BADPW" != 200 ] || die "login with a wrong password still returned 200 (login not really authenticating)"
+rm -f "$LBODY"
+info "apps/user verify GREEN (healthz 200; login -> access_token; wrong password -> $BADPW)"

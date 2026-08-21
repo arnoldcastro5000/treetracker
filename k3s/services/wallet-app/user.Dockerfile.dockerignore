@@ -1,0 +1,9 @@
+# Keep the host's installed node_modules (and VCS/build cruft) out of the apps/user build context.
+# Paths are relative to the build context (the treetracker-wallet-app monorepo root). BuildKit reads
+# this dockerfile-specific ignore file (<dockerfile>.dockerignore) in preference to a context-root one.
+node_modules
+**/node_modules
+.git
+**/dist
+**/.next
+**/.turbo

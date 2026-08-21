@@ -3,8 +3,9 @@
 #
 # INCREMENTAL: FOUNDATION (dedicated DB + wallet-api migrations + queue plumbing + api_key seed +
 # object-storage bucket + the Keycloak confidential client + the shared browser-flow seed) PLUS the
-# wallet-api SERVICE (image + overlay + Mapping /wallet/v2/ + verify). apps/user + apps/web are a later
-# slice, so the adapter stays optIn (a bare `up.sh` skips it). Bring it up with: ./k3s/up.sh wallet-app
+# wallet-api SERVICE (image + overlay + Mapping /wallet/v2/ + verify) PLUS apps/user (the NestJS
+# user-api: image + overlay + Mapping /user-api/ + login/healthz verify). apps/web is a later slice, so
+# the adapter stays optIn (a bare `up.sh` skips it). Bring it up with: ./k3s/up.sh wallet-app
 name: wallet-app
 optIn: true
 # Backing tiers this subsystem needs (identity 05 / data 04 / ingress 06 / object storage 07).
@@ -12,6 +13,7 @@ optIn: true
 dependsOn: [postgres, gateway, keycloak, localstack]
 namespaces:
   - wallet-api
+  - treetracker-wallet-monorepo-user-api
 # Dedicated wallet-app database (data-stores decision 04): wallet-api tables in schema `wallet`,
 # apps/user's queue.message plumbing in schema `queue`, both inside this one database.
 databases: [wallet_app]
@@ -41,11 +43,29 @@ secrets:
       s3_region: ${OBJECT_STORAGE_REGION}
       s3_access_key_id: test
       s3_secret_access_key: test
+  # apps/user reads all its config from env; provide it as one Secret consumed via envFrom.
+  # PRIVATE_KEYCLOAK_* point at the shared realm + the foundation's confidential client
+  # (wallet-app-user-dev-svc / dummy dev secret); DATABASE_URL is the wallet_app DB the queue-listener
+  # subscribes to (schema `queue`).
+  - namespace: treetracker-wallet-monorepo-user-api
+    name: wallet-user-env
+    literals:
+      PORT: "8080"
+      PRIVATE_KEYCLOAK_BASE_URL: ${KEYCLOAK_INTERNAL_URL}
+      PRIVATE_KEYCLOAK_REALM: ${KEYCLOAK_REALM}
+      PRIVATE_KEYCLOAK_CLIENT_ID: ${KEYCLOAK_WALLET_CLIENT_ID}
+      PRIVATE_KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_WALLET_CLIENT_SECRET}
+      DATABASE_URL: postgresql://postgres:postgres@postgres.data.svc.cluster.local:5432/${WALLET_APP_DB}
 # The wallet-api service image (node16 Express). Built from the submodule with its own Dockerfile;
 # HELD submodule code (endpoint-aware S3, IMAGE_READ_BASE, Keycloak-JWKS auth) is baked in at build.
 images:
   - name: wallet-api
     context: treetracker-wallet-api
+  # apps/user (NestJS user-api): built workspace-aware from the monorepo ROOT context with an override
+  # Dockerfile (the submodule's own apps/user/Dockerfile is not workspace-aware). See user.Dockerfile.
+  - name: wallet-user
+    context: treetracker-wallet-app
+    dockerfile: k3s/services/wallet-app/user.Dockerfile
 # Local overlay: wallet-api base + local image/secrets/env (see kustomization.yaml).
 overlay: k3s/services/wallet-app
 # Roll the wallet-api Deployment before the verify gate.
@@ -53,6 +73,9 @@ waitFor:
   - namespace: wallet-api
     deployment: treetracker-wallet-api-v2
     image: wallet-api:local
+  - namespace: treetracker-wallet-monorepo-user-api
+    deployment: treetracker-wallet-monorepo-user-api
+    image: wallet-user:local
 # Hard gate: a Keycloak-bearer + api-key GET /wallet/v2/wallets returns the seeded caller wallet.
 verify: k3s/services/wallet-app/verify.sh
 hooks:

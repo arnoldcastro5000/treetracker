@@ -1,0 +1,44 @@
+# Local (k3d) overlay for apps/user (the NestJS user-api), reusing the repo's deployment/base but:
+#  - locally-built image `wallet-user:local`, built workspace-aware from the monorepo ROOT context
+#    (see ../user.Dockerfile); 1 replica; no DigitalOcean node-affinity
+#  - drops the k8s-wait-for ClusterRole + binding (no wait-for Job runs locally, and the same-named
+#    ClusterRole also lives in the wallet-api base, so exactly one copy may exist across the overlay)
+#  - injects the env the code reads (PORT, PRIVATE_KEYCLOAK_*, DATABASE_URL) from the adapter Secret
+#    `wallet-user-env` (standalone.yaml). The base injects zero env.
+# The base Mapping (/user-api/ -> the service, Emissary default rewrite /) and Service (:80 -> :8080)
+# are kept as-is; the route reaches POST /login, POST /register, GET /healthz.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: treetracker-wallet-monorepo-user-api
+resources:
+  - ../../../../treetracker-wallet-app/apps/user/deployment/base
+images:
+  - name: greenstand/treetracker-wallet-monorepo-user-api
+    newName: wallet-user
+    newTag: local
+replicas:
+  - name: treetracker-wallet-monorepo-user-api
+    count: 1
+patches:
+  # no wait-for Job locally; drop the ClusterRole + binding (also avoids a collision with the
+  # identically-named k8s-wait-for ClusterRole in the wallet-api base)
+  - patch: |-
+      $patch: delete
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRole
+      metadata: { name: k8s-wait-for }
+  - patch: |-
+      $patch: delete
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRoleBinding
+      metadata: { name: k8s-wait-for }
+  # drop the DigitalOcean node-affinity, add the LOCAL env from the adapter Secret
+  - target: { kind: Deployment, name: treetracker-wallet-monorepo-user-api }
+    patch: |-
+      - op: remove
+        path: /spec/template/spec/affinity
+      - op: add
+        path: /spec/template/spec/containers/0/envFrom
+        value:
+          - secretRef:
+              name: wallet-user-env

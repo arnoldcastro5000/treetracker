@@ -1,0 +1,70 @@
+# Local (k3d) overlay for the wallet-api service, reusing the repo's deployment/base but:
+#  - locally-built image `wallet-api:local`, 1 replica, no DigitalOcean node-affinity
+#  - drops the db-migration Job + its k8s-wait-for RBAC (the wallet_app schema + migrations are run by
+#    the adapter pre hook migrate.sh; no CRDs/controllers locally)
+#  - fixes the cosmetic containerPort 80 -> 3006 (the app listens on NODE_PORT || 3006)
+#  - adds the LOCAL env the code reads: KEYCLOAK_REALM_URL (turns on the Keycloak-JWKS auth path),
+#    S3_ENDPOINT (+ forcePathStyle) at host-side LocalStack, IMAGE_READ_BASE at the shared /s3 gateway.
+# The base Mapping (/wallet/v2/ -> this service, rewrite /) and Service (:80 -> :3006) are kept as-is.
+# DATABASE_URL/DATABASE_SCHEMA + S3 creds/bucket/region + dummy JWT keys come from the adapter's
+# local Secrets (standalone.yaml).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: wallet-api
+resources:
+  - ../../../../treetracker-wallet-api/deployment/base
+images:
+  - name: greenstand/treetracker-wallet-api
+    newName: wallet-api
+    newTag: local
+replicas:
+  - name: treetracker-wallet-api-v2
+    count: 1
+patches:
+  # migrations run by the pre hook; drop the base Job + its wait-for RBAC (no CRDs locally)
+  - patch: |-
+      $patch: delete
+      apiVersion: batch/v1
+      kind: Job
+      metadata: { name: wallet-db-migration-job }
+  - patch: |-
+      $patch: delete
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRole
+      metadata: { name: k8s-wait-for }
+  - patch: |-
+      $patch: delete
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRoleBinding
+      metadata: { name: k8s-wait-for }
+  # drop the DigitalOcean node-affinity, fix the containerPort, add the LOCAL env
+  - target: { kind: Deployment, name: treetracker-wallet-api-v2 }
+    patch: |-
+      - op: remove
+        path: /spec/template/spec/affinity
+      - op: replace
+        path: /spec/template/spec/containers/0/ports/0/containerPort
+        value: 3006
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: KEYCLOAK_REALM_URL
+          value: http://keycloak.keycloak.svc.cluster.local:8080/realms/treetracker
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: S3_ENDPOINT
+          value: http://host.k3d.internal:4566
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: IMAGE_READ_BASE
+          value: http://localhost:8088/s3
+      # `development` turns on wallet-api's CORS middleware (app.js gates it on NODE_ENV) - a same-origin
+      # gateway needs none today, but it is the safety net the apps/web slice relies on. No
+      # `.env.development` ships, so dotenv stays a no-op and the k8s env wins.
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: NODE_ENV
+          value: development
