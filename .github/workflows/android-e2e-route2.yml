@@ -212,7 +212,15 @@ jobs:
           script: |
             adb wait-for-device
             export PATH="$(pwd)/node_modules/.bin:$PATH"
+            adb logcat -c || true
+            set +e
             ./node_modules/.bin/wdio run ./wdio.conf.ts --spec "features/${E2E_SPEC}"
+            ec=$?
+            # Capture the full device log regardless of outcome so a capture-flow
+            # failure is diagnosable (CameraX bind errors, the .local bypass Timber line).
+            mkdir -p test-artifacts
+            adb logcat -d > test-artifacts/logcat.txt 2>&1 || true
+            exit $ec
 
       # Stage-2 fidelity assertion: the real APK's capture must have reached the DB.
       - name: Assert upload landed (stage 2)
