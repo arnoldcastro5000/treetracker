@@ -92,6 +92,18 @@ INSERT INTO wallet.wallet (id, name) SELECT :'aid', :'aname' WHERE NOT EXISTS (S
 INSERT INTO wallet.wallet (id, name) SELECT :'bid', :'bname' WHERE NOT EXISTS (SELECT 1 FROM wallet.wallet WHERE id = :'bid');
 INSERT INTO wallet.wallet (id, name) SELECT :'cid', :'cname' WHERE NOT EXISTS (SELECT 1 FROM wallet.wallet WHERE id = :'cid');
 
+-- B is the demo/verify RECEIVER; reset it to the baseline (owns 0) each run. The verify hook credits B
+-- with real transfers, so without this reset a re-seed would find B holding tokens. Safe: wallet.token
+-- has no FKs (transaction rows just orphan harmlessly), and A/C are topped back up below.
+DELETE FROM wallet.token WHERE wallet_id = :'bid';
+
+-- Reset the C -> B send-trust to the untrusted baseline. The verify hook grants then revokes it; an
+-- interrupted run can leave a lingering trusted/requested row (which would fail the untrusted assertion
+-- below and pile up cancelled rows). wallet_trust has no FKs, so clearing every C -> B send row is safe.
+DELETE FROM wallet.wallet_trust
+  WHERE actor_wallet_id = :'cid' AND target_wallet_id = :'bid'
+    AND request_type = 'send'::wallet.entity_trust_request_type;
+
 -- tokens: capture_id references nothing (unique), wallet_id = owner. TOP UP to the target count so a
 -- re-run adds only the difference (idempotent when already at target; supports bumping the count).
 INSERT INTO wallet.token (capture_id, wallet_id)
