@@ -1,0 +1,245 @@
+# Co-located Route 2 Android E2E: stands up the WHOLE local backend (k3d capture
+# pipeline + host-side LocalStack + admin /verify) and an accelerated Android
+# emulator in ONE ubuntu-latest job, then drives the real `.local` APK through the
+# full capture -> upload -> pipeline -> admin /verify loop against that local stack.
+#
+# This is the CI arm of the "Validate the real app upload fidelity" effort. It is
+# SEPARATE from the fast, PR-gated, offline android-e2e.yml (02_signup_flow), which
+# must never regress. This heavy job runs on demand / on a branch pattern, never on
+# every PR (see .scratch/volunteer-e2e-ci/issues/21-colocated-route2-ci-job-shape.md).
+#
+# First-green is STAGED so a red run points at one cause:
+#   stage 1  coexistence : stack up + smoke + two-file backend test + emulator boots
+#                          + `.local` APK installs + offline 02 green.
+#   stage 2  fidelity    : real APK runs 03 (capture -> upload); the /verify Chrome
+#                          assertion is skipped; the upload is asserted to LAND in
+#                          field_data.raw_capture.
+#   stage 3  full (default): real APK runs 03 end to end incl. the /verify assertion.
+name: Android E2E (Route 2, co-located)
+
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: "First-green stage: 1 coexistence, 2 upload-fidelity, 3 full /verify"
+        type: choice
+        default: "3"
+        options: ["1", "2", "3"]
+  push:
+    branches:
+      - "**route2-e2e**"
+  # Once reliably green, enable a slow cadence instead of leaning on manual dispatch:
+  # schedule:
+  #   - cron: "0 4 * * *"   # nightly 04:00 UTC
+
+jobs:
+  e2e-route2:
+    runs-on: ubuntu-latest
+    # Cold: builds ~9 pipeline images + boots k3d + LocalStack + the emulator, then
+    # runs 03 (processor CronJob is minute-cadenced). Generous ceiling; ticket 20
+    # flags a standard public runner as tight.
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Resolve stage
+        run: |
+          # A push carries no input, so it runs the conservative coexistence stage (1)
+          # while the pipeline is not yet proven green; on-demand workflow_dispatch keeps
+          # the stage picker (default 3). Once green, raise the push default or add the
+          # nightly schedule at stage 3.
+          STAGE="${{ github.event.inputs.stage || '1' }}"
+          echo "STAGE=$STAGE" >> "$GITHUB_ENV"
+          case "$STAGE" in
+            1) echo "E2E_SPEC=02_signup_flow.feature" >> "$GITHUB_ENV" ;;
+            2) echo "E2E_SPEC=03_capture_setup.feature" >> "$GITHUB_ENV"
+               echo "E2E_SKIP_ADMIN_VERIFY=1"           >> "$GITHUB_ENV" ;;
+            3) echo "E2E_SPEC=03_capture_setup.feature" >> "$GITHUB_ENV" ;;
+            *) echo "::error::unknown stage '$STAGE'"; exit 1 ;;
+          esac
+          echo "Resolved stage $STAGE"
+
+      # Single source of truth for the local admin creds: the orchestrator defaults.
+      # seed-admin (inside up.sh) seeds THIS row and the e2e verify step logs in with
+      # the SAME values. No secrets: Route 2 uses static local dummy creds. Deriving
+      # them here (masked) avoids duplicating the literal in the committed workflow.
+      - name: Resolve admin creds from orchestrator defaults
+        run: |
+          . k3s/lib/orchestrator-lib.sh
+          echo "::add-mask::$ADMIN_PASSWORD"
+          {
+            echo "ADMIN_USER=$ADMIN_USER"
+            echo "ADMIN_PASSWORD=$ADMIN_PASSWORD"
+            echo "ADMIN_URL=$GATEWAY_URL"
+          } >> "$GITHUB_ENV"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Gradle cache
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      # Installs the k3d/kubectl/yq/helm the orchestrator needs (Docker is preinstalled
+      # on ubuntu-latest). up.sh then creates the k3d cluster and the stack itself.
+      - name: Install cluster tools
+        run: ./k3s/prepare-linux.sh
+
+      # Stand up the full capture subsystem (postgres + gateway + LocalStack + the
+      # capture/verify pipeline + admin) against a fresh k3d cluster, then seed the
+      # admin row (seed-admin uses ADMIN_USER/ADMIN_PASSWORD from the job env).
+      - name: Stand up local stack (up.sh capture)
+        run: ./k3s/up.sh capture
+
+      - name: Verify stack (smoke gate)
+        run: ./k3s/up.sh verify capture
+
+      # Backend proof that the REAL two-file upload pattern flows end to end, in both
+      # orders (happy path + orphan self-heal). Runs without the emulator, so it is the
+      # cheapest fidelity signal; gate it to stage 1 (later stages exercise the real APK).
+      - name: Backend two-file acceptance
+        if: env.STAGE == '1'
+        run: ./k3s/route2-two-file-test.sh
+
+      # 02 is offline and the local build's S3/API values point at the emulator host
+      # alias, so these placeholder Android keys only let Gradle configuration resolve.
+      # Route 2 needs no real Cognito/AWS secrets (static creds live in the local variant).
+      - name: Write dummy Android keys
+        run: |
+          cat > treetracker-android/treetracker.keys.properties <<'KEYS'
+          s3_production_identity_pool_id=placeholder
+          prod_treetracker_client_id=placeholder
+          prod_treetracker_client_secret=placeholder
+          s3_test_identity_pool_id=placeholder
+          test_treetracker_client_id=placeholder
+          test_treetracker_client_secret=placeholder
+          s3_dev_identity_pool_id=placeholder
+          dev_treetracker_client_id=placeholder
+          dev_treetracker_client_secret=placeholder
+          treetracker_client_id=placeholder
+          treetracker_client_secret=placeholder
+          KEYS
+
+      - name: Build local APK
+        working-directory: treetracker-android
+        run: ./gradlew :app:assembleLocal --no-daemon --stacktrace
+
+      - name: Install e2e dependencies
+        working-directory: apps/e2e
+        run: npm ci
+
+      # See android-e2e.yml: the @wdio/appium-service spawns a bare `appium`, so it must
+      # be on PATH globally; pin the uiautomator2 driver to the lockfile-resolved version.
+      - name: Install Appium and UiAutomator2 driver (global)
+        run: |
+          npm install -g appium@2.19.0
+          appium driver install uiautomator2@3.10.0
+
+      # The /verify step (stage 3) drives desktop Chrome via the chromedriver npm binary.
+      # The runner's Chrome auto-updates, so match the driver to the installed major
+      # instead of the package's pinned version, or the session fails to start.
+      - name: Match chromedriver to runner Chrome
+        if: env.STAGE == '3'
+        working-directory: apps/e2e
+        env:
+          DETECT_CHROMEDRIVER_VERSION: "true"
+          CHROMEDRIVER_FORCE_DOWNLOAD: "true"
+        run: |
+          google-chrome --version || true
+          npm rebuild chromedriver
+
+      # Record the capture baseline so stage 2 can assert the real upload LANDED.
+      - name: Snapshot raw_capture baseline
+        if: env.STAGE == '2'
+        run: |
+          POD=$(kubectl -n data get pod -l app=postgres -o jsonpath='{.items[0].metadata.name}')
+          [ -n "$POD" ] || { echo "::error::no postgres pod"; exit 1; }
+          BASE=$(kubectl -n data exec -i "$POD" -- \
+            psql -U postgres -d treetracker -tAc "SELECT count(*) FROM field_data.raw_capture")
+          echo "RAW_CAPTURE_BASELINE=${BASE:-0}" >> "$GITHUB_ENV"
+          echo "raw_capture baseline = ${BASE:-0}"
+
+      - name: Run E2E on emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        env:
+          APK_PATH: ${{ github.workspace }}/treetracker-android/app/build/outputs/apk/local/app-local.apk
+          APP_PACKAGE: org.greenstand.android.TreeTracker.local
+          DEVICE_NAME: emulator-5554
+          CAPTURE_ARTIFACTS: "1"
+          E2E_STRICT_TAGS: "1"
+          # ADMIN_URL / ADMIN_USER / ADMIN_PASSWORD and E2E_SKIP_ADMIN_VERIFY are inherited
+          # from the job env / the Resolve-stage step.
+        with:
+          api-level: 30
+          target: google_apis
+          arch: x86_64
+          profile: pixel_5
+          disable-animations: true
+          working-directory: apps/e2e
+          emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back emulated -camera-front emulated
+          script: |
+            adb wait-for-device
+            export PATH="$(pwd)/node_modules/.bin:$PATH"
+            ./node_modules/.bin/wdio run ./wdio.conf.ts --spec "features/${E2E_SPEC}"
+
+      # Stage-2 fidelity assertion: the real APK's capture must have reached the DB.
+      - name: Assert upload landed (stage 2)
+        if: env.STAGE == '2'
+        run: |
+          POD=$(kubectl -n data get pod -l app=postgres -o jsonpath='{.items[0].metadata.name}')
+          [ -n "$POD" ] || { echo "::error::no postgres pod"; exit 1; }
+          NOW=$(kubectl -n data exec -i "$POD" -- \
+            psql -U postgres -d treetracker -tAc "SELECT count(*) FROM field_data.raw_capture")
+          echo "raw_capture now = ${NOW:-0} (baseline ${RAW_CAPTURE_BASELINE})"
+          if [ "${NOW:-0}" -le "${RAW_CAPTURE_BASELINE}" ]; then
+            echo "::error::real-app capture did not land in field_data.raw_capture"
+            exit 1
+          fi
+          echo "real-app upload landed: raw_capture grew ${RAW_CAPTURE_BASELINE} -> ${NOW}"
+
+      # Cluster diagnostics for a failed run (pods + recent logs of the pipeline).
+      - name: Collect k8s diagnostics
+        if: failure()
+        run: |
+          DIR=apps/e2e/test-artifacts/k8s
+          mkdir -p "$DIR"
+          kubectl get pods -A -o wide                    > "$DIR/pods.txt" 2>&1 || true
+          kubectl get events -A --sort-by=.lastTimestamp > "$DIR/events.txt" 2>&1 || true
+          for ns in data object-storage bulk-pack-services field-data-api \
+                    treetracker-api images-api admin-api admin-client emissary; do
+            for pod in $(kubectl -n "$ns" get pods -o name 2>/dev/null); do
+              name="${pod#pod/}"
+              kubectl -n "$ns" logs --all-containers --tail=300 "$pod" \
+                > "$DIR/logs-$ns-$name.txt" 2>&1 || true
+            done
+          done
+
+      - name: Upload evidence artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-route2-evidence-stage${{ env.STAGE }}
+          path: apps/e2e/test-artifacts/
+          if-no-files-found: warn
+
+      - name: Tear down cluster
+        if: always()
+        run: ./k3s/down.sh || true
