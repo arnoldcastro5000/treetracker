@@ -1,0 +1,42 @@
+# pre-commit framework config (https://pre-commit.com).
+#
+# Install once:  pipx install pre-commit  (or: pip install pre-commit)
+#                pre-commit install
+# Run manually:  pre-commit run --all-files
+# Bump hook revs: pre-commit autoupdate
+#
+# The ESLint hook lints the Android e2e suite and carries the project anti-pattern
+# guard (no content-description selectors in step definitions). It uses the suite's
+# own ESLint (apps/e2e/eslint.config.mjs + devDeps), so run `npm ci` in apps/e2e
+# first (the same install the CI job does).
+#
+# NOTE on the local secret-scan hook: this repo also ships an untracked, local-only
+# secret-scan git hook (gitleaks + betterleaks). Running `pre-commit install`
+# REPLACES .git/hooks/pre-commit, so it would take over from that bash hook. Keep
+# both by either (a) leaving the bash hook in place and running `pre-commit run`
+# from it, or (b) adding a gitleaks hook here. The secret-scan stays local-only by
+# policy, so it is deliberately NOT added to this tracked config.
+default_stages: [pre-commit]
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-merge-conflict
+      - id: check-yaml
+      - id: check-json
+      - id: check-added-large-files
+
+  - repo: local
+    hooks:
+      - id: eslint-e2e
+        name: eslint (apps/e2e, incl. byDesc/tapDesc guard)
+        language: system
+        # Runs the suite's own ESLint (needs `npm ci` in apps/e2e). pass_filenames
+        # is false so ESLint runs with cwd=apps/e2e and its flat-config `features/**`
+        # / `utils/**` patterns resolve correctly.
+        entry: bash -c 'cd apps/e2e && npm run -s lint'
+        files: ^apps/e2e/(features|utils)/.*\.(ts|tsx)$
+        pass_filenames: false

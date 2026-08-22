@@ -4,7 +4,8 @@
   "private": true,
   "scripts": {
     "test": "wdio run ./wdio.conf.ts",
-    "test:spec": "wdio run ./wdio.conf.ts --spec"
+    "test:spec": "wdio run ./wdio.conf.ts --spec",
+    "lint": "eslint features utils"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
@@ -19,7 +20,10 @@
     "appium-uiautomator2-driver": "^3.0.0",
     "chromedriver": "^150.0.4",
     "dotenv": "^16.0.0",
+    "eslint": "^9.39.5",
+    "eslint-plugin-no-only-tests": "^3.4.0",
     "ts-node": "^10.0.0",
-    "typescript": "^5.0.0"
+    "typescript": "^5.0.0",
+    "typescript-eslint": "^8.67.0"
   }
 }
