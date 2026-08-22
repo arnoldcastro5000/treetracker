@@ -242,7 +242,10 @@ jobs:
           profile: pixel_5
           disable-animations: true
           working-directory: apps/e2e
-          emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back virtualscene -virtualscene-poster tree=${{ github.workspace }}/tree-poster.jpg -camera-front emulated
+          # `wall` is a real poster slot in the default virtualscene (Toren1BD.posters);
+          # `tree` was ignored (wrong slot) so the scene showed the default green/checkerboard
+          # test pattern instead of our image. `wall=` places the tree image on the room wall.
+          emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back virtualscene -virtualscene-poster wall=${{ github.workspace }}/tree-poster.jpg -camera-front emulated
           # The emulator-runner runs each script LINE as a separate `sh -c` and aborts
           # at the first non-zero line, so trailing capture lines never run after a wdio
           # failure. Wrap the run + logcat dump in ONE bash -c so the device log is always
@@ -254,19 +257,27 @@ jobs:
             bash -c 'export PATH="$(pwd)/node_modules/.bin:$PATH"; mkdir -p test-artifacts; adb logcat > test-artifacts/logcat.txt 2>&1 & LPID=$!; adb shell dumpsys media.camera > test-artifacts/camera-dumpsys-before.txt 2>&1 || true; ./node_modules/.bin/wdio run ./wdio.conf.ts --spec "features/$E2E_SPEC"; ec=$?; adb shell dumpsys media.camera > test-artifacts/camera-dumpsys-after.txt 2>&1 || true; sleep 2; kill $LPID 2>/dev/null || true; exit $ec'
 
       # Stage-2 fidelity assertion: the real APK's capture must have reached the DB.
+      # The consumer inserts into bulk_tree_upload immediately, but the minute-cadenced
+      # processor propagates it to field_data.raw_capture asynchronously - and the slower
+      # real-camera flow shifts the upload past a processor cycle. So POLL for up to ~3
+      # minutes rather than checking once (a single check is racy).
       - name: Assert upload landed (stage 2)
         if: env.STAGE == '2'
         run: |
           POD=$(kubectl -n data get pod -l app=postgres -o jsonpath='{.items[0].metadata.name}')
           [ -n "$POD" ] || { echo "::error::no postgres pod"; exit 1; }
-          NOW=$(kubectl -n data exec -i "$POD" -- \
-            psql -U postgres -d treetracker -tAc "SELECT count(*) FROM field_data.raw_capture")
-          echo "raw_capture now = ${NOW:-0} (baseline ${RAW_CAPTURE_BASELINE})"
-          if [ "${NOW:-0}" -le "${RAW_CAPTURE_BASELINE}" ]; then
-            echo "::error::real-app capture did not land in field_data.raw_capture"
-            exit 1
-          fi
-          echo "real-app upload landed: raw_capture grew ${RAW_CAPTURE_BASELINE} -> ${NOW}"
+          for i in $(seq 1 18); do
+            NOW=$(kubectl -n data exec -i "$POD" -- \
+              psql -U postgres -d treetracker -tAc "SELECT count(*) FROM field_data.raw_capture")
+            echo "[$i] raw_capture now = ${NOW:-0} (baseline ${RAW_CAPTURE_BASELINE})"
+            if [ "${NOW:-0}" -gt "${RAW_CAPTURE_BASELINE}" ]; then
+              echo "real-app upload landed: raw_capture grew ${RAW_CAPTURE_BASELINE} -> ${NOW}"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::real-app capture did not land in field_data.raw_capture within ~3m"
+          exit 1
 
       # Always-on component status roster (success or fail), captured while the cluster is
       # still up (before teardown): every pod + deployment readiness, to the artifacts AND
