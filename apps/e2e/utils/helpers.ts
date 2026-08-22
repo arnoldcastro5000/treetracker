@@ -1,4 +1,4 @@
-import { $, $$, browser } from "@wdio/globals";
+import { $, browser } from "@wdio/globals";
 import { Tags, byTag, languageOption } from "./tags";
 import { perfTapAttempts, perfFallback } from "./perf";
 
@@ -556,29 +556,17 @@ export async function approveCapture(): Promise<void> {
   }
 }
 
-// Save the note dialog. Its positive button is an ApprovalButton(approval=true),
-// so it carries testTag "approve" - but the review screen's approve behind the
-// dialog carries the SAME id, and a bare resourceId match returns the base
-// window's (review) node first. The dialog is an AlertDialog (a modal window
-// rendered on top), so its approve is the LAST match. Tap the last displayed
-// "approve" by coordinate, retrying until the "Add note to tree" dialog closes;
-// the legacy content-desc path is the last-resort fallback.
+// Save the note dialog. The note dialog is a Material AlertDialog rendered in its
+// OWN window; the app enables testTagsAsResourceId at each Activity root, and that
+// does NOT reach the dialog window, so the dialog's positive (save) button exposes
+// neither a resource-id nor a content-description to UiAutomator (verified in CI:
+// resourceId "approve" matched only the review screen's button behind the scrim,
+// and byDesc("Save note") never resolved). The dialog title text DOES surface, so
+// tap the green check by coordinate (right of the dialog centre, ~0.58w × 0.57h)
+// and retry until the "Add note to tree" dialog closes. Legacy desc as last resort.
 export async function saveNote(): Promise<void> {
   const closed = async () => !(await isVisible("Add note to tree"));
-  for (let i = 0; i < 5; i++) {
-    if (await closed()) return;
-    const els = await $$(`android=new UiSelector().resourceId("${Tags.APPROVE}")`);
-    let lastBounds: string | null = null;
-    for (const el of els) {
-      if (await el.isDisplayed().catch(() => false)) {
-        lastBounds = await el.getAttribute("bounds").catch(() => lastBounds);
-      }
-    }
-    const c = lastBounds ? boundsCentre(lastBounds) : null;
-    if (c) await tapAt(c.x, c.y);
-    await browser.pause(700);
-  }
-  if (await closed()) return;
+  if (await tapFractionUntil(0.58, 0.57, closed, "saveNote")) return;
   tagFallback("saveNote", Tags.APPROVE);
   await tapDesc("Save note", 8000);
 }

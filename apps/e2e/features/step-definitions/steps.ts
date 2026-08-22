@@ -23,10 +23,9 @@ import {
   setFieldByTag,
   byTextContains,
   byClass,
-  byDesc,
   APP_PACKAGE,
 } from "../../utils/helpers";
-import { Tags } from "../../utils/tags";
+import { Tags, byTag } from "../../utils/tags";
 import { verifyCaptureOnAdmin, stopChromedriver } from "../../utils/admin";
 
 // ─── Scenario state (cucumber World) ──────────────────────────────────────────
@@ -231,36 +230,39 @@ When("I upload the captures", async () => {
 });
 
 Then("the ready-to-upload count becomes 0", async () => {
-  // The "Trees ready to upload" Text node displays treesRemainingToSync.
-  // Poll its rendered text until the sync completes (count flips to "0").
+  // The remaining-to-sync counter carries testTag "ready-to-upload-count"
+  // (DashboardScreen.kt), surfaced as a resource-id. Poll its rendered text until
+  // the sync completes (count flips to "0"). The old byDesc anchor never resolved:
+  // that content-description does not exist in the app.
   await browser.waitUntil(async () => {
-    const el = await byDesc("Trees ready to upload");
-    if (!(await el.isDisplayed())) return false;
-    const txt = await el.getText();
-    return txt === "0";
+    const el = await byTag(Tags.REMAINING_COUNT);
+    if (!(await el.isDisplayed().catch(() => false))) return false;
+    return (await el.getText()) === "0";
   }, { timeout: 60000, interval: 1500, timeoutMsg: "ready-to-upload count never reached 0" });
 });
 
 Then("the uploaded count becomes 1", async () => {
-  // The "Trees uploaded" Text node displays treesSynced. Check >= 1 rather
-  // than == 1: with noReset:true between 03-only re-runs (launchWithExistingUser
-  // does not clearApp), the synced count accumulates across runs. The semantic
-  // we care about is that this upload added a tree.
+  // The synced counter carries testTag "uploaded-count" (DashboardScreen.kt).
+  // Check >= 1 rather than == 1: with noReset:true between 03-only re-runs
+  // (launchWithExistingUser does not clearApp), the synced count accumulates
+  // across runs. The semantic we care about is that this upload added a tree.
   await browser.waitUntil(async () => {
-    const el = await byDesc("Trees uploaded");
-    if (!(await el.isDisplayed())) return false;
-    const txt = await el.getText();
-    const n = parseInt(txt, 10);
+    const el = await byTag(Tags.UPLOADED_COUNT);
+    if (!(await el.isDisplayed().catch(() => false))) return false;
+    const n = parseInt(await el.getText(), 10);
     return !isNaN(n) && n >= 1;
   }, { timeout: 60000, interval: 1500, timeoutMsg: "uploaded count never reached >= 1" });
 });
 
 Then("the ready-to-upload count is greater than 0", async () => {
-  // DashboardScreen renders treesRemainingToSync as plain text. After one
-  // tree capture in this run, the count is exactly "1" (signup clears data).
-  // byText is exact-match, so this won't collide with multi-digit text
-  // elsewhere on the screen.
-  await waitForVisible("1", 10000);
+  // Read the remaining-to-sync counter by its testTag and assert it is > 0, rather
+  // than an exact-text "1" match that could collide with any other "1" on screen.
+  await browser.waitUntil(async () => {
+    const el = await byTag(Tags.REMAINING_COUNT);
+    if (!(await el.isDisplayed().catch(() => false))) return false;
+    const n = parseInt(await el.getText(), 10);
+    return !isNaN(n) && n > 0;
+  }, { timeout: 10000, interval: 1000, timeoutMsg: "ready-to-upload count never became > 0" });
 });
 
 When("I advance through org setup", async () => {

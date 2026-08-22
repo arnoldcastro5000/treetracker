@@ -36,6 +36,10 @@ export const Tags = {
   INFO: "info",
   ADD: "add",
   USER_IMAGE: "user-image",
+
+  // Dashboard counters (read to assert upload progress)
+  UPLOADED_COUNT: "uploaded-count",
+  REMAINING_COUNT: "ready-to-upload-count",
 } as const;
 
 /** Per-language selection row, e.g. languageOption("ENGLISH") -> "language-option-english". */
