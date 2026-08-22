@@ -46,6 +46,17 @@ jobs:
         with:
           submodules: recursive
 
+      # Standard hygiene: the co-located stack builds ~10 pipeline images plus an emulator
+      # system image against ubuntu-latest's ~14 GB free disk. Reclaim space from large
+      # preinstalled toolchains we never use (keep the Android SDK - the APK build and the
+      # emulator need it). df -h before/after makes the headroom a visible, tracked metric.
+      - name: Free up disk space
+        run: |
+          echo "== disk before =="; df -h /
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup \
+            /opt/hostedtoolcache/CodeQL /usr/share/swift || true
+          echo "== disk after =="; df -h /
+
       - name: Resolve stage
         run: |
           # A push carries no input, so it runs the conservative coexistence stage (1)
