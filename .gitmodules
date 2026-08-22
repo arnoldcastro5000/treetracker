@@ -1,6 +1,6 @@
 [submodule "treetracker-wallet-app"]
 	path = treetracker-wallet-app
-	url = https://github.com/Amaanfaiz/treetracker-wallet-app.git
+	url = https://github.com/arnoldcastro5000/treetracker-wallet-app.git
 [submodule "treetracker-database"]
 	path = treetracker-database
 	url = https://github.com/Greenstand/treetracker-database.git
