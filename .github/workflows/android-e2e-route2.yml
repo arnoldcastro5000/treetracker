@@ -72,7 +72,11 @@ jobs:
             1) echo "E2E_SPEC=02_signup_flow.feature" >> "$GITHUB_ENV"
                echo "E2E_STRICT_TAGS=1"               >> "$GITHUB_ENV" ;;
             2) echo "E2E_SPEC=03_capture_setup.feature" >> "$GITHUB_ENV"
-               echo "E2E_SKIP_ADMIN_VERIFY=1"           >> "$GITHUB_ENV" ;;
+               echo "E2E_SKIP_ADMIN_VERIFY=1"           >> "$GITHUB_ENV"
+               # EXPERIMENT: skip launchWithExistingUser's terminate+activate relaunch,
+               # which is suspected to leave Compose semantics unexposed to UiAutomator
+               # (empty a11y tree). The [compose-probe] wdio log line reports the result.
+               echo "E2E_SKIP_RELAUNCH=1"               >> "$GITHUB_ENV" ;;
             3) echo "E2E_SPEC=03_capture_setup.feature" >> "$GITHUB_ENV" ;;
             *) echo "::error::unknown stage '$STAGE'"; exit 1 ;;
           esac

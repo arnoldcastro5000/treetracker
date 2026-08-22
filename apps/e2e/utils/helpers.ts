@@ -428,13 +428,45 @@ export async function dismissSystemDialogsIfPresent(): Promise<void> {
   }
 }
 
+// Diagnostic: how much of the Compose UI is visible to UiAutomator right now.
+// A source tree with textNodes=0 means the Jetpack Compose semantics are NOT
+// exposed to the accessibility bridge, so NO element is findable (this is the
+// route2 stage-2 empty-tree stall). The line prints to the wdio stdout, which
+// the CI step captures, so a run tells us fresh-vs-relaunch semantics state.
+async function logSemanticsProbe(label: string): Promise<void> {
+  try {
+    const src = await browser.getPageSource();
+    const textNodes = (src.match(/text="[^"]+"/g) || []).length;
+    const descNodes = (src.match(/content-desc="[^"]+"/g) || []).length;
+    // eslint-disable-next-line no-console
+    console.log(
+      `[compose-probe] ${label} relaunch=${!process.env.E2E_SKIP_RELAUNCH} ` +
+        `srcLen=${src.length} textNodes=${textNodes} descNodes=${descNodes}`,
+    );
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.log(`[compose-probe] ${label} getPageSource failed: ${(e as Error).message}`);
+  }
+}
+
 export async function launchWithExistingUser(): Promise<void> {
-  // Terminate + reactivate so each scenario starts from the Dashboard root,
-  // not whatever screen the prior scenario ended on. With noReset:true, app
-  // data persists, so the cold start auto-skips onboarding.
-  await browser.terminateApp(APP_PACKAGE);
-  await browser.activateApp(APP_PACKAGE);
-  await browser.pause(1500);
+  // EXPERIMENT (E2E_SKIP_RELAUNCH): the terminate + activate relaunch below is
+  // suspected to leave Jetpack Compose semantics unexposed to UiAutomator, so the
+  // a11y tree returns zero text/content-desc and nothing is findable (route2
+  // stage-2 stall on the language picker). When the flag is set, drive onboarding
+  // on appium's original fresh launch instead, to test whether a fresh launch
+  // restores semantics exposure. Compare the [compose-probe] line to a relaunch run.
+  if (process.env.E2E_SKIP_RELAUNCH) {
+    await browser.pause(1500);
+  } else {
+    // Terminate + reactivate so each scenario starts from the Dashboard root,
+    // not whatever screen the prior scenario ended on. With noReset:true, app
+    // data persists, so the cold start auto-skips onboarding.
+    await browser.terminateApp(APP_PACKAGE);
+    await browser.activateApp(APP_PACKAGE);
+    await browser.pause(1500);
+  }
+  await logSemanticsProbe("launchWithExistingUser");
   await ensureOnDashboard();
 }
 
