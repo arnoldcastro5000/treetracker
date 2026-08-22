@@ -63,7 +63,10 @@ jobs:
           # (coexistence) and 2 (real-app upload fidelity, raw_capture grows) are proven
           # green, so pushes now run stage 3 (full 03 incl. the desktop-Chrome admin
           # /verify). workflow_dispatch keeps the stage picker for regressions.
-          STAGE="${{ github.event.inputs.stage || '3' }}"
+          # EXPERIMENT BRANCH (probe/route2-e2e-camexp): default stage 2 (skip admin /verify,
+          # keep k3s + the upload-landed assertion). Real tree camera is toggled by the emulator
+          # config below, NOT by the stage. Do NOT merge this branch to the green pipeline.
+          STAGE="${{ github.event.inputs.stage || '2' }}"
           echo "STAGE=$STAGE" >> "$GITHUB_ENV"
           # Strict tags ONLY for stage 1 (offline 02, fully id-tapped + proven). The 03
           # capture controls need the app's designed COORDINATE fallback (the tag's
@@ -206,6 +209,14 @@ jobs:
           echo "RAW_CAPTURE_BASELINE=${BASE:-0}" >> "$GITHUB_ENV"
           echo "raw_capture baseline = ${BASE:-0}"
 
+      # EXPERIMENT: place the bundled test tree image as the virtualscene poster, so the
+      # emulator's back camera "sees" a real tree (Exp A, amended). Absolute path required.
+      - name: Prepare virtualscene poster (real tree camera experiment)
+        run: |
+          cp treetracker-android/app/src/main/assets/testtreeimage.jpg \
+             "${{ github.workspace }}/tree-poster.jpg"
+          ls -l "${{ github.workspace }}/tree-poster.jpg"
+
       - name: Run E2E on emulator
         uses: reactivecircus/android-emulator-runner@v2
         env:
@@ -216,21 +227,27 @@ jobs:
           # ADMIN_URL / ADMIN_USER / ADMIN_PASSWORD / E2E_SKIP_ADMIN_VERIFY / E2E_STRICT_TAGS
           # are inherited from the job env / the Resolve-stage step (strict is stage-1 only).
         with:
-          api-level: 30
+          # EXPERIMENT (Exp A, amended): API 34 (API 30 is Google's known-bad camera env),
+          # back camera = virtualscene with the tree poster so real CameraX capture has real
+          # content. Front camera stays `emulated` (virtualscene is back-lens only; the selfie
+          # keeps the .local bypass). `adb shell setprop debug.e2e.realtree 1` (below) makes the
+          # app run the REAL CameraX path for the tree only.
+          api-level: 34
           target: google_apis
           arch: x86_64
           profile: pixel_5
           disable-animations: true
           working-directory: apps/e2e
-          emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back emulated -camera-front emulated
+          emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back virtualscene -virtualscene-poster tree=${{ github.workspace }}/tree-poster.jpg -camera-front emulated
           # The emulator-runner runs each script LINE as a separate `sh -c` and aborts
           # at the first non-zero line, so trailing capture lines never run after a wdio
           # failure. Wrap the run + logcat dump in ONE bash -c so the device log is always
           # captured (CameraX bind path + the .local bypass Timber line) before the exit.
           script: |
             adb wait-for-device
+            adb shell setprop debug.e2e.realtree 1
             adb logcat -c || true
-            bash -c 'export PATH="$(pwd)/node_modules/.bin:$PATH"; mkdir -p test-artifacts; adb logcat > test-artifacts/logcat.txt 2>&1 & LPID=$!; ./node_modules/.bin/wdio run ./wdio.conf.ts --spec "features/$E2E_SPEC"; ec=$?; sleep 2; kill $LPID 2>/dev/null || true; exit $ec'
+            bash -c 'export PATH="$(pwd)/node_modules/.bin:$PATH"; mkdir -p test-artifacts; adb logcat > test-artifacts/logcat.txt 2>&1 & LPID=$!; adb shell dumpsys media.camera > test-artifacts/camera-dumpsys-before.txt 2>&1 || true; ./node_modules/.bin/wdio run ./wdio.conf.ts --spec "features/$E2E_SPEC"; ec=$?; adb shell dumpsys media.camera > test-artifacts/camera-dumpsys-after.txt 2>&1 || true; sleep 2; kill $LPID 2>/dev/null || true; exit $ec'
 
       # Stage-2 fidelity assertion: the real APK's capture must have reached the DB.
       - name: Assert upload landed (stage 2)
