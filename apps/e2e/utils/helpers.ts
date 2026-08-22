@@ -585,6 +585,30 @@ export async function saveNote(): Promise<void> {
 export async function ensureOnDashboard(): Promise<void> {
   if (await isVisible("UPLOAD")) return;
 
+  // ── A11y-tree readiness gate ───────────────────────────────────────────────
+  // On the headless emulator Jetpack Compose sometimes exposes its semantics to
+  // UiAutomator only a few seconds after first composition - intermittently (a
+  // terminate+activate relaunch makes it permanent, hence E2E_SKIP_RELAUNCH; a
+  // fresh launch usually settles within a few seconds but occasionally longer).
+  // Without this gate a slow start makes the language step's short poll miss, and
+  // every later guard then times out against an empty tree, surfacing as a
+  // confusing "UPLOAD not displayed" 30s failure. Wait for a known onboarding or
+  // dashboard anchor to become queryable before driving any taps.
+  const readyAnchors = ["ENGLISH", "PHONE", "First Name", "UPLOAD"];
+  await browser.waitUntil(
+    async () => {
+      for (const a of readyAnchors) if (await isVisible(a)) return true;
+      return false;
+    },
+    {
+      timeout: 45000,
+      interval: 1000,
+      timeoutMsg:
+        "onboarding a11y tree never became queryable within 45s (Compose semantics not exposed to UiAutomator)",
+    },
+  );
+  if (await isVisible("UPLOAD")) return;
+
   // ── Language Picker ──────────────────────────────────────────────────────
   if (await isVisibleWithTimeout("ENGLISH", 10000)) {
     await tapText("ENGLISH");
