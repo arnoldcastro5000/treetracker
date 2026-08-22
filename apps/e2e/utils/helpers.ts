@@ -1,4 +1,4 @@
-import { $, browser } from "@wdio/globals";
+import { $, $$, browser } from "@wdio/globals";
 import { Tags, byTag, languageOption } from "./tags";
 import { perfTapAttempts, perfFallback } from "./perf";
 
@@ -481,6 +481,106 @@ export async function dismissSyncReminderIfPresent(): Promise<void> {
 export async function advancePastSessionNote(): Promise<void> {
   await waitForVisible("Add note to session", 15000);
   await browser.pressKeyCode(66); // KEYCODE_ENTER → IME Go → NavigateNext
+}
+
+// Dismiss the one-shot tutorial overlay shown on first reach of the capture and
+// tree-image-review screens. It is the shared Tutorial composable (Tutorial.kt),
+// so its dismiss control carries testTag "tutorial-dismiss" and its copy starts
+// "Click on ..." (same as the selfie tutorial). Compose exposes the control as a
+// resource-id, NOT a content-description, so the old tapDesc("Dismiss tutorial")
+// never resolved. The overlay can render a beat AFTER the screen, so wait up to
+// `appearTimeout` for it to show before deciding (an instant check races the
+// overlay in and leaves an interaction-blocking scrim up). If it never appears
+// (already dismissed this install), return. Tag-first with the dialog-centre
+// coordinate fallback (the checkmark sits at ~0.5w × 0.69h of the dialog).
+export async function dismissCaptureTutorialIfPresent(appearTimeout = 5000): Promise<void> {
+  const tagUp = async () =>
+    await (await byTag(Tags.TUTORIAL_DISMISS)).isDisplayed().catch(() => false);
+  const present = async () => (await tagUp()) || (await isVisible("Click on"));
+  let appeared = false;
+  try {
+    await browser.waitUntil(present, { timeout: appearTimeout, interval: 400 });
+    appeared = true;
+  } catch {
+    appeared = false;
+  }
+  if (!appeared) return;
+  const dismissed = async () => !(await present());
+  if (!(await tapTagUntil(Tags.TUTORIAL_DISMISS, dismissed, "dismissCaptureTutorial"))) {
+    tagFallback("dismissCaptureTutorial", Tags.TUTORIAL_DISMISS);
+    await tapFractionUntil(0.5, 0.69, dismissed, "dismissCaptureTutorial");
+  }
+}
+
+// Wait for the tree-capture screen's capture button (testTag "capture-tree",
+// TreeCaptureScreen.kt). It is the anchor unique to that screen.
+export async function waitForCaptureButton(timeout = 15000): Promise<void> {
+  await (await byTag(Tags.CAPTURE_TREE)).waitForDisplayed({ timeout });
+}
+
+// Tap the tree-capture button until the review screen appears. Dismiss any pending
+// capture tutorial first (its scrim eats taps), then wait for the location-gated
+// button to be enabled (a disabled Compose button ignores taps until a GPS fix).
+// Tag-first (capture-tree) with the ActionBar-centre coordinate fallback
+// (~0.5w × 0.88h), mirroring takeSelfie. Success = the review screen's unique
+// "NOTE" control shows - a specific anchor, NOT a page-source diff, so the capture
+// screen's live GPS/sensor text cannot false-positive the navigation check.
+export async function captureTree(): Promise<void> {
+  await dismissCaptureTutorialIfPresent(1500);
+  const btn = await byTag(Tags.CAPTURE_TREE);
+  await btn.waitForDisplayed({ timeout: 30000 });
+  // Some builds/emulators do not surface `enabled` on the tagged node; if so,
+  // proceed and let the tap-until-navigated retries cover a late GPS fix.
+  await btn.waitForEnabled({ timeout: 15000 }).catch(() => { /* enabled not surfaced */ });
+  const captured = async () => await isVisible("NOTE");
+  if (!(await tapTagUntil(Tags.CAPTURE_TREE, captured, "captureTree", 8))) {
+    tagFallback("captureTree", Tags.CAPTURE_TREE);
+    await tapFractionUntil(0.5, 0.88, captured, "captureTree");
+  }
+  await browser.pause(1000);
+}
+
+// Approve the reviewed tree capture. Dismiss the review tutorial first, then tap
+// the approve control (testTag "approve", the ApprovalButton) until it pops back
+// to the capture screen. Success = the capture-tree anchor reappears - a specific
+// anchor, NOT a page-source diff. Coordinate fallback ~0.6w × 0.9h (as approveSelfie).
+export async function approveCapture(): Promise<void> {
+  // The review tutorial is normally dismissed by the review-screen step already,
+  // so only a short defensive check is needed here.
+  await dismissCaptureTutorialIfPresent(1500);
+  const approved = async () =>
+    await (await byTag(Tags.CAPTURE_TREE)).isDisplayed().catch(() => false);
+  if (!(await tapTagUntil(Tags.APPROVE, approved, "approveCapture"))) {
+    tagFallback("approveCapture", Tags.APPROVE);
+    await tapFractionUntil(0.6, 0.9, approved, "approveCapture");
+  }
+}
+
+// Save the note dialog. Its positive button is an ApprovalButton(approval=true),
+// so it carries testTag "approve" - but the review screen's approve behind the
+// dialog carries the SAME id, and a bare resourceId match returns the base
+// window's (review) node first. The dialog is an AlertDialog (a modal window
+// rendered on top), so its approve is the LAST match. Tap the last displayed
+// "approve" by coordinate, retrying until the "Add note to tree" dialog closes;
+// the legacy content-desc path is the last-resort fallback.
+export async function saveNote(): Promise<void> {
+  const closed = async () => !(await isVisible("Add note to tree"));
+  for (let i = 0; i < 5; i++) {
+    if (await closed()) return;
+    const els = await $$(`android=new UiSelector().resourceId("${Tags.APPROVE}")`);
+    let lastBounds: string | null = null;
+    for (const el of els) {
+      if (await el.isDisplayed().catch(() => false)) {
+        lastBounds = await el.getAttribute("bounds").catch(() => lastBounds);
+      }
+    }
+    const c = lastBounds ? boundsCentre(lastBounds) : null;
+    if (c) await tapAt(c.x, c.y);
+    await browser.pause(700);
+  }
+  if (await closed()) return;
+  tagFallback("saveNote", Tags.APPROVE);
+  await tapDesc("Save note", 8000);
 }
 
 // ─── Full First-Launch Navigation ─────────────────────────────────────────────

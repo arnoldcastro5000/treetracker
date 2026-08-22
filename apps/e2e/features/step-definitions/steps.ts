@@ -8,7 +8,6 @@ import {
   isVisible,
   isVisibleWithTimeout,
   tapText,
-  tapDesc,
   tapRightArrow,
   tapBackArrow,
   acceptPrivacyPolicy,
@@ -16,6 +15,11 @@ import {
   tapFirstListItem,
   tapFirstListItemAndAdvance,
   dismissSyncReminderIfPresent,
+  dismissCaptureTutorialIfPresent,
+  waitForCaptureButton,
+  captureTree,
+  approveCapture,
+  saveNote,
   setFieldByTag,
   byTextContains,
   byClass,
@@ -77,14 +81,12 @@ Then("I should see the messages screen", async () => {
 });
 
 Then("I should see the capture screen", async () => {
-  // Dismiss the one-shot capture tutorial if it appears (only on first reach
-  // per app install, subsequent visits skip it). Anchor on the unique capture
-  // button afterwards, which is the only contentDescription specific to this
-  // screen.
-  try {
-    await tapDesc("Dismiss tutorial", 5000);
-  } catch { /* tutorial already dismissed in a prior session */ }
-  await (await byDesc("Take tree photo")).waitForDisplayed({ timeout: 15000 });
+  // Dismiss the one-shot capture tutorial (tag-first, coordinate fallback), then
+  // anchor on the capture button's testTag "capture-tree". Compose exposes it as a
+  // resource-id, NOT a content-description, so the old byDesc("Take tree photo")
+  // never resolved on the emulator.
+  await dismissCaptureTutorialIfPresent();
+  await waitForCaptureButton();
 });
 
 // ─── Actions ──────────────────────────────────────────────────────────────────
@@ -152,7 +154,7 @@ When("I add a unique note to the tree capture", async function (this: any) {
   await noteField.setValue(this.fingerprint);
   try { await browser.hideKeyboard(); } catch { /* not shown */ }
   await browser.pause(300);
-  await tapDesc("Save note", 8000);
+  await saveNote();
   // Wait for the dialog to close before proceeding.
   await browser.waitUntil(
     async () => !(await isVisible("Add note to tree")),
@@ -176,38 +178,33 @@ Then("the admin panel verify page shows our note", async function (this: any) {
 });
 
 When("I accept the tree capture", async () => {
-  // The review tutorial overlay may still be up, dismiss it (idempotent)
-  // before targeting the Approve button.
-  try {
-    await tapDesc("Dismiss tutorial", 3000);
-  } catch { /* tutorial not present */ }
-  await tapDesc("Approve tree", 15000);
+  // Dismiss the review tutorial (idempotent) then approve via the "approve"
+  // testTag (ApprovalButton), with a coordinate fallback. Replaces the
+  // content-description path, which Compose does not expose on the emulator.
+  await approveCapture();
 });
 
 Then("I should be back on the capture screen", async () => {
-  // After approval, navigation pops back to TreeCaptureScreen, its capture
-  // button is the unique anchor (Dashboard / UserSelect / WalletSelect / AddOrg
-  // none expose this contentDescription).
-  await (await byDesc("Take tree photo")).waitForDisplayed({ timeout: 15000 });
+  // After approval, navigation pops back to TreeCaptureScreen; its capture button
+  // (testTag "capture-tree") is the unique anchor (Dashboard / UserSelect /
+  // WalletSelect / AddOrg none carry it).
+  await waitForCaptureButton();
 });
 
 When("I take a tree capture", async () => {
-  // Wait for the location-gated capture button to become enabled and tap it.
-  const btn = await byDesc("Take tree photo");
-  await btn.waitForDisplayed({ timeout: 30000 });
-  await btn.waitForEnabled({ timeout: 30000 });
-  await btn.click();
+  // Tap the location-gated capture button (testTag "capture-tree") until the
+  // review screen appears; tag-first with a coordinate fallback (retries cover the
+  // brief location-gate disable). Replaces the content-description click.
+  await captureTree();
 });
 
 Then("I should see the tree image review screen", async () => {
   // Wait for the screen to render first (NOTE button is unique to this screen,
   // theme-styled all-caps), then dismiss the one-shot review tutorial if it is
-  // still up. The tutorial may render slightly after NOTE, racing dismiss
-  // against waitForVisible can miss it on slow emulators.
+  // still up (tag-first, coordinate fallback). The tutorial may render slightly
+  // after NOTE, racing dismiss against waitForVisible can miss it on slow emulators.
   await waitForVisible("NOTE", 15000);
-  try {
-    await tapDesc("Dismiss tutorial", 5000);
-  } catch { /* tutorial already gone or never appeared */ }
+  await dismissCaptureTutorialIfPresent();
 });
 
 When("I enter organization {string}", async (orgName: string) => {
