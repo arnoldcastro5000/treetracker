@@ -57,6 +57,23 @@ jobs:
             /opt/hostedtoolcache/CodeQL /usr/share/swift || true
           echo "== disk after =="; df -h /
 
+      # Always log the runner VM's specs, so a11y-exposure timing (issue #23) can be
+      # correlated against CPU/memory (GitHub-hosted runners vary; the exposure race
+      # may be spec-dependent). Never fails the job.
+      - name: Log runner resources (CPU / memory / disk)
+        if: always()
+        run: |
+          echo "== CPU =="
+          echo "nproc: $(nproc)"
+          lscpu 2>/dev/null | grep -E 'Model name|^CPU\(s\)|Thread\(s\) per core|Core\(s\) per socket|Socket|CPU max MHz|CPU MHz' || true
+          echo "== Memory =="
+          free -h || true
+          grep -E 'MemTotal|MemAvailable|MemFree|SwapTotal' /proc/meminfo || true
+          echo "== Disk =="
+          df -h / || true
+          echo "== Load / uptime =="
+          uptime || true
+
       - name: Resolve stage
         run: |
           # The push default tracks the current first-green target. Stages 1
@@ -254,6 +271,8 @@ jobs:
             adb wait-for-device
             adb shell setprop debug.e2e.realtree 1
             adb logcat -c || true
+            mkdir -p test-artifacts
+            { echo "== host resources just before wdio (a11y-exposure phase) =="; date -u; echo "nproc: $(nproc)"; free -h; uptime; } | tee test-artifacts/host-resources-pre-wdio.txt || true
             bash -c 'export PATH="$(pwd)/node_modules/.bin:$PATH"; mkdir -p test-artifacts; adb logcat > test-artifacts/logcat.txt 2>&1 & LPID=$!; adb shell dumpsys media.camera > test-artifacts/camera-dumpsys-before.txt 2>&1 || true; ./node_modules/.bin/wdio run ./wdio.conf.ts --spec "features/$E2E_SPEC"; ec=$?; adb shell dumpsys media.camera > test-artifacts/camera-dumpsys-after.txt 2>&1 || true; sleep 2; kill $LPID 2>/dev/null || true; exit $ec'
 
       # Stage-2 fidelity assertion: the real APK's capture must have reached the DB.
