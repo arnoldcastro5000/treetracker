@@ -59,25 +59,31 @@ jobs:
 
       - name: Resolve stage
         run: |
-          # The push default tracks the current first-green target. Stage 1 (coexistence)
-          # is proven green, so pushes now run stage 2 (real-app upload fidelity). Raise to
-          # 3 once stage 2 is green; on-demand workflow_dispatch keeps the stage picker.
-          STAGE="${{ github.event.inputs.stage || '2' }}"
+          # The push default tracks the current first-green target. Stages 1
+          # (coexistence) and 2 (real-app upload fidelity, raw_capture grows) are proven
+          # green, so pushes now run stage 3 (full 03 incl. the desktop-Chrome admin
+          # /verify). workflow_dispatch keeps the stage picker for regressions.
+          STAGE="${{ github.event.inputs.stage || '3' }}"
           echo "STAGE=$STAGE" >> "$GITHUB_ENV"
           # Strict tags ONLY for stage 1 (offline 02, fully id-tapped + proven). The 03
           # capture controls need the app's designed COORDINATE fallback (the tag's
           # bounds-center clickGesture does not trigger the CaptureButton), and strict
           # throws before that fallback runs. So leave strict OFF for stages 2/3.
+          #
+          # E2E_SKIP_RELAUNCH: 03 is a single scenario, so it does NOT need
+          # launchWithExistingUser's terminate+activate relaunch - and that relaunch
+          # leaves Jetpack Compose semantics unexposed to UiAutomator (empty a11y tree,
+          # stalls on the language picker). Set it for both 03 stages. A future
+          # multi-scenario suite must instead reset without a relaunch (or poll the
+          # page source until non-empty) to keep scenario isolation.
           case "$STAGE" in
             1) echo "E2E_SPEC=02_signup_flow.feature" >> "$GITHUB_ENV"
                echo "E2E_STRICT_TAGS=1"               >> "$GITHUB_ENV" ;;
             2) echo "E2E_SPEC=03_capture_setup.feature" >> "$GITHUB_ENV"
                echo "E2E_SKIP_ADMIN_VERIFY=1"           >> "$GITHUB_ENV"
-               # EXPERIMENT: skip launchWithExistingUser's terminate+activate relaunch,
-               # which is suspected to leave Compose semantics unexposed to UiAutomator
-               # (empty a11y tree). The [compose-probe] wdio log line reports the result.
                echo "E2E_SKIP_RELAUNCH=1"               >> "$GITHUB_ENV" ;;
-            3) echo "E2E_SPEC=03_capture_setup.feature" >> "$GITHUB_ENV" ;;
+            3) echo "E2E_SPEC=03_capture_setup.feature" >> "$GITHUB_ENV"
+               echo "E2E_SKIP_RELAUNCH=1"               >> "$GITHUB_ENV" ;;
             *) echo "::error::unknown stage '$STAGE'"; exit 1 ;;
           esac
           echo "Resolved stage $STAGE"
