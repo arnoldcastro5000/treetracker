@@ -100,7 +100,11 @@ jobs:
 
       # Installs the k3d/kubectl/yq/helm the orchestrator needs (Docker is preinstalled
       # on ubuntu-latest). up.sh then creates the k3d cluster and the stack itself.
+      # SKIP_SUBMODULE_BRANCHES: the checkout above already pinned every submodule to its
+      # superproject commit, so prepare-linux must not force them onto the k3s branch.
       - name: Install cluster tools
+        env:
+          SKIP_SUBMODULE_BRANCHES: "1"
         run: ./k3s/prepare-linux.sh
 
       # Stand up the full capture subsystem (postgres + gateway + LocalStack + the

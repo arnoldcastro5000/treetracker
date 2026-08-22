@@ -45,6 +45,12 @@ fetch() {   # fetch URL -> file, retrying transient failures
 
 # -- 0. Submodule branches (match macOS prepare.sh: switch each submodule to the K3S branch) -
 # Mirrors prepare.sh so Linux hosts pin the same submodule branch the stack is built against.
+# SKIP in CI: actions/checkout already pins every submodule to the superproject commit, so
+# forcing them onto the moving k3s branch is both unnecessary and wrong (it would swap the
+# code under test to branch tips). CI sets SKIP_SUBMODULE_BRANCHES=1.
+if [ "${SKIP_SUBMODULE_BRANCHES:-0}" = 1 ]; then
+  info "submodule branch switch skipped (SKIP_SUBMODULE_BRANCHES=1; submodules already pinned)"
+else
 export SUBMODULE_BRANCH
 export ROOT
 log "submodule branches"
@@ -100,6 +106,7 @@ fi
 if [ -s "$missing_file" ]; then
   missing_submodule_branches="$(cat "$missing_file")"
   die "missing origin/$SUBMODULE_BRANCH branch in submodule(s): ${missing_submodule_branches//$'\n'/, }"
+fi
 fi
 
 # -- 1. Docker (must already be present; this script does not install the engine) ----------
