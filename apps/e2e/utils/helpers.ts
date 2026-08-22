@@ -594,6 +594,10 @@ export async function ensureOnDashboard(): Promise<void> {
   // every later guard then times out against an empty tree, surfacing as a
   // confusing "UPLOAD not displayed" 30s failure. Wait for a known onboarding or
   // dashboard anchor to become queryable before driving any taps.
+  // Timeout is env-configurable (E2E_READINESS_TIMEOUT_MS, default 45s) so slower
+  // images (e.g. API 34 under swiftshader) can be probed with a longer window
+  // without a code change.
+  const readyTimeoutMs = Number(process.env.E2E_READINESS_TIMEOUT_MS) || 45000;
   const readyAnchors = ["ENGLISH", "PHONE", "First Name", "UPLOAD"];
   await browser.waitUntil(
     async () => {
@@ -601,10 +605,11 @@ export async function ensureOnDashboard(): Promise<void> {
       return false;
     },
     {
-      timeout: 45000,
+      timeout: readyTimeoutMs,
       interval: 1000,
-      timeoutMsg:
-        "onboarding a11y tree never became queryable within 45s (Compose semantics not exposed to UiAutomator)",
+      timeoutMsg: `onboarding a11y tree never became queryable within ${Math.round(
+        readyTimeoutMs / 1000,
+      )}s (Compose semantics not exposed to UiAutomator)`,
     },
   );
   if (await isVisible("UPLOAD")) return;

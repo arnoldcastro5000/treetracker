@@ -68,6 +68,10 @@ jobs:
           # config below, NOT by the stage. Do NOT merge this branch to the green pipeline.
           STAGE="${{ github.event.inputs.stage || '2' }}"
           echo "STAGE=$STAGE" >> "$GITHUB_ENV"
+          # EXPERIMENT: API 34 exposes Compose semantics to UiAutomator more slowly than
+          # API 30 (issue #23). Give the a11y-readiness gate a longer window to classify
+          # slow-race vs permanent-empty before onboarding can even reach the camera.
+          echo "E2E_READINESS_TIMEOUT_MS=90000" >> "$GITHUB_ENV"
           # Strict tags ONLY for stage 1 (offline 02, fully id-tapped + proven). The 03
           # capture controls need the app's designed COORDINATE fallback (the tag's
           # bounds-center clickGesture does not trigger the CaptureButton), and strict
