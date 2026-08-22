@@ -59,11 +59,10 @@ jobs:
 
       - name: Resolve stage
         run: |
-          # A push carries no input, so it runs the conservative coexistence stage (1)
-          # while the pipeline is not yet proven green; on-demand workflow_dispatch keeps
-          # the stage picker (default 3). Once green, raise the push default or add the
-          # nightly schedule at stage 3.
-          STAGE="${{ github.event.inputs.stage || '1' }}"
+          # The push default tracks the current first-green target. Stage 1 (coexistence)
+          # is proven green, so pushes now run stage 2 (real-app upload fidelity). Raise to
+          # 3 once stage 2 is green; on-demand workflow_dispatch keeps the stage picker.
+          STAGE="${{ github.event.inputs.stage || '2' }}"
           echo "STAGE=$STAGE" >> "$GITHUB_ENV"
           case "$STAGE" in
             1) echo "E2E_SPEC=02_signup_flow.feature" >> "$GITHUB_ENV" ;;
@@ -229,6 +228,25 @@ jobs:
             exit 1
           fi
           echo "real-app upload landed: raw_capture grew ${RAW_CAPTURE_BASELINE} -> ${NOW}"
+
+      # Always-on component status roster (success or fail), captured while the cluster is
+      # still up (before teardown): every pod + deployment readiness, to the artifacts AND
+      # the run summary page so each run is self-documenting and the health of every
+      # component is a tracked signal as the stack grows.
+      - name: Component status report
+        if: always()
+        run: |
+          DIR=apps/e2e/test-artifacts/status
+          mkdir -p "$DIR"
+          {
+            echo "### Component status (stage ${STAGE:-?})"
+            echo '```'
+            kubectl get pods -A -o wide 2>&1 || true
+            echo
+            kubectl get deploy,cronjob -A 2>&1 || true
+            echo '```'
+          } | tee "$DIR/components.txt" >> "$GITHUB_STEP_SUMMARY"
+          kubectl get svc -A > "$DIR/services.txt" 2>&1 || true
 
       # Cluster diagnostics for a failed run (pods + recent logs of the pipeline).
       - name: Collect k8s diagnostics

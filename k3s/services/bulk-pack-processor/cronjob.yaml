@@ -25,7 +25,11 @@ spec:
           containers:
             - name: bulk-pack-processor
               image: bulk-pack-processor:local
-              imagePullPolicy: IfNotPresent
+              # :local images are import-only (k3d image import), never on a registry. Never
+              # (not IfNotPresent) so a tick that fires before the import is visible fails FAST
+              # instead of a doomed Docker Hub pull + minutes-long ImagePullBackOff that, under
+              # concurrencyPolicy Forbid, wedges every later tick past the verify window.
+              imagePullPolicy: Never
               env:
                 - name: DATA_INPUT_DB_URL
                   valueFrom:
