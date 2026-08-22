@@ -28,6 +28,11 @@ on:
   push:
     branches:
       - "**route2-e2e**"
+    # A docs-only change must not spend a full ~25-min stack+emulator run. A push with
+    # ONLY these paths is skipped; any code change (workflow included) still runs.
+    paths-ignore:
+      - "**/*.md"
+      - "apps/e2e/docs/**"
   # Once reliably green, enable a slow cadence instead of leaning on manual dispatch:
   # schedule:
   #   - cron: "0 4 * * *"   # nightly 04:00 UTC
