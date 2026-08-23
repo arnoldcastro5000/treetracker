@@ -247,6 +247,14 @@ jobs:
           CAPTURE_ARTIFACTS: "1"
           # ADMIN_URL / ADMIN_USER / ADMIN_PASSWORD / E2E_SKIP_ADMIN_VERIFY / E2E_STRICT_TAGS
           # are inherited from the job env / the Resolve-stage step (strict is stage-1 only).
+          # issue #23 (API-34 Compose a11y exposure), rung 2 of the force-a11y ladder: set to
+          # an installed a11y service component (read one from the a11y-dumpsys-forced.txt
+          # artifact) to force an ENABLED service, which makes AccessibilityManager.isEnabled()
+          # genuinely true so Compose always emits semantics. Empty = rung 1 (the
+          # accessibility_enabled flag alone) - no code change is needed to escalate, only this
+          # value. No scenario retries here on purpose: this run must MEASURE a11y determinism,
+          # and a retry would hide a miss and corrupt the measurement.
+          E2E_FORCE_A11Y_SERVICE: ""
         with:
           # EXPERIMENT (Exp A, amended): API 34 (API 30 is Google's known-bad camera env),
           # back camera = virtualscene with the tree poster so real CameraX capture has real
@@ -275,6 +283,11 @@ jobs:
             { echo "== host resources just before wdio (a11y-exposure phase) =="; date -u; echo "nproc: $(nproc)"; free -h; uptime; } | tee test-artifacts/host-resources-pre-wdio.txt || true
             { echo "== a11y settings pre-wdio =="; echo -n "enabled_accessibility_services="; adb shell settings get secure enabled_accessibility_services; echo -n "accessibility_enabled="; adb shell settings get secure accessibility_enabled; echo -n "touch_exploration_enabled="; adb shell settings get secure touch_exploration_enabled; } | tee test-artifacts/a11y-settings-pre.txt 2>&1 || true
             adb shell dumpsys accessibility > test-artifacts/a11y-dumpsys-pre.txt 2>&1 || true
+            adb shell settings put secure accessibility_enabled 1 || true
+            [ -n "$E2E_FORCE_A11Y_SERVICE" ] && adb shell settings put secure enabled_accessibility_services "$E2E_FORCE_A11Y_SERVICE" || true
+            { echo "== a11y settings AFTER force =="; echo -n "enabled_accessibility_services="; adb shell settings get secure enabled_accessibility_services; echo -n "accessibility_enabled="; adb shell settings get secure accessibility_enabled; echo -n "touch_exploration_enabled="; adb shell settings get secure touch_exploration_enabled; } | tee test-artifacts/a11y-settings-forced.txt 2>&1 || true
+            adb shell dumpsys accessibility > test-artifacts/a11y-dumpsys-forced.txt 2>&1 || true
+            [ "$(adb shell settings get secure accessibility_enabled 2>/dev/null | tr -d '\r')" = "1" ] || echo "::warning::force-a11y premise did not hold: accessibility_enabled != 1 after put; a red/green result may not reflect the a11y experiment"
             bash -c 'export PATH="$(pwd)/node_modules/.bin:$PATH"; mkdir -p test-artifacts; adb logcat > test-artifacts/logcat.txt 2>&1 & LPID=$!; ( while true; do echo "== $(date -u +%H:%M:%S) =="; adb shell dumpsys accessibility 2>/dev/null | sed -n "1,50p"; sleep 3; done ) > test-artifacts/a11y-timeline.txt 2>&1 & APID=$!; adb shell dumpsys media.camera > test-artifacts/camera-dumpsys-before.txt 2>&1 || true; ./node_modules/.bin/wdio run ./wdio.conf.ts --spec "features/$E2E_SPEC"; ec=$?; adb shell dumpsys media.camera > test-artifacts/camera-dumpsys-after.txt 2>&1 || true; if [ "$ec" -ne 0 ]; then PID=$(adb shell pidof org.greenstand.android.TreeTracker.local 2>/dev/null | tr -d "\r"); [ -n "$PID" ] && adb shell kill -3 "$PID" 2>/dev/null || true; sleep 4; adb shell dumpsys accessibility > test-artifacts/a11y-dumpsys-onfail.txt 2>&1 || true; adb shell dumpsys window > test-artifacts/window-dumpsys-onfail.txt 2>&1 || true; adb shell uiautomator dump /sdcard/win.xml >/dev/null 2>&1 && adb pull /sdcard/win.xml test-artifacts/uiautomator-dump-onfail.xml >/dev/null 2>&1 || true; fi; sleep 2; kill $LPID $APID 2>/dev/null || true; exit $ec'
 
       # Stage-2 fidelity assertion: the real APK's capture must have reached the DB.

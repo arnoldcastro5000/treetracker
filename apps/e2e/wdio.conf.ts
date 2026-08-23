@@ -34,6 +34,14 @@ export const config: any = {
       "appium:noReset": true,
       "appium:newCommandTimeout": 240,
       "appium:uiautomator2ServerLaunchTimeout": 60000,
+      // Keep any enabled accessibility service alive during the UiAutomator2
+      // session. By default the driver suppresses a11y services, which can stop
+      // Jetpack Compose from emitting its semantics tree. On API 34 the app's
+      // AccessibilityManager.isEnabled() flip is already racy (issue #23), so
+      // the emulator step forces a11y on; suppressing it again would undo that.
+      // With no a11y service enabled there is nothing to suppress, so this is a
+      // no-op there and a correct default for a Compose app under UiAutomator2.
+      "appium:disableSuppressAccessibilityService": true,
     },
   ],
 
