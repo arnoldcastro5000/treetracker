@@ -276,12 +276,16 @@ jobs:
           # NOT a11y enablement (a fully bound service alone did not make it deterministic).
           E2E_FORCE_A11Y_SERVICE: ""
         with:
-          # EXPERIMENT (Exp A, amended): API 34 (API 30 is Google's known-bad camera env),
-          # back camera = virtualscene with the tree poster so real CameraX capture has real
-          # content. Front camera stays `emulated` (virtualscene is back-lens only; the selfie
-          # keeps the .local bypass). `adb shell setprop debug.e2e.realtree 1` (below) makes the
-          # app run the REAL CameraX path for the tree only.
-          api-level: 34
+          # EXPERIMENT (API-32 probe, issue #23): API 32 (Android 12L). API 30 is Google's known-bad
+          # camera env, and API 34 has an intermittent Compose->UiAutomator a11y-exposure race (~1 in 3
+          # boots expose). API 32 sits between - this probe tests whether it keeps working real CameraX
+          # capture WITHOUT the API-34 a11y bridge race. Based on the clean 6346ad7 baseline
+          # (standup-before-boot, ram-size 4096M = the ~64% arrangement), so api-level is the ONLY
+          # variable vs API 34. back camera = virtualscene with the tree poster so real CameraX capture
+          # has real content. Front camera stays `emulated` (virtualscene is back-lens only; the selfie
+          # keeps the .local bypass). `adb shell setprop debug.e2e.realtree 1` (below) makes the app run
+          # the REAL CameraX path for the tree only.
+          api-level: 32
           # google_apis. (Tried google_atd to fix the a11y-bridge boot lottery: it did NOT - a11y
           # exposure was still intermittent AND the stripped ATD image ships no a11y services to
           # bind, plus a new deep-flow failure. So reverted.) API-34 Compose->UiAutomator semantics
