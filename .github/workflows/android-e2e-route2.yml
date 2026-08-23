@@ -177,23 +177,15 @@ jobs:
           SKIP_SUBMODULE_BRANCHES: "1"
         run: ./k3s/prepare-linux.sh
 
-      # Stand up the full capture subsystem (postgres + gateway + LocalStack + the
-      # capture/verify pipeline + admin) against a fresh k3d cluster, then seed the
-      # admin row (seed-admin uses ADMIN_USER/ADMIN_PASSWORD from the job env).
-      - name: Stand up local stack (up.sh capture)
-        if: env.PROBE_ONLY != '1'
-        run: ./k3s/up.sh capture
-
-      - name: Verify stack (smoke gate)
-        if: env.PROBE_ONLY != '1'
-        run: ./k3s/up.sh verify capture
-
-      # Backend proof that the REAL two-file upload pattern flows end to end, in both
-      # orders (happy path + orphan self-heal). Runs without the emulator, so it is the
-      # cheapest fidelity signal; gate it to stage 1 (later stages exercise the real APK).
-      - name: Backend two-file acceptance
-        if: env.STAGE == '1' && env.PROBE_ONLY != '1'
-        run: ./k3s/route2-two-file-test.sh
+      # issue #23 NEXT ACTION 1 (boot-before-k3d): the full capture subsystem is NOT
+      # stood up here any more. The a11y "boot lottery" is decided at guest boot under
+      # host CPU pressure, and the k3d control plane running during boot was the driver
+      # of the ~64% (vs ~83% quiet-boot) stall. So the emulator boots FIRST (the "Run
+      # E2E on emulator" step below), and the emulator script stands up the stack AFTER
+      # the boot has won the a11y lottery (./k3s/up.sh capture + verify, inside
+      # scripts/run-emulator-e2e.sh). Steps that need the backend but not the emulator
+      # (two-file acceptance, upload-landed assertion) run AFTER the emulator step; the
+      # cluster the script created stays up (the action tears down only the emulator).
 
       # 02 is offline and the local build's S3/API values point at the emulator host
       # alias, so these placeholder Android keys only let Gradle configuration resolve.
@@ -242,16 +234,10 @@ jobs:
           google-chrome --version || true
           npm rebuild chromedriver
 
-      # Record the capture baseline so stage 2 can assert the real upload LANDED.
-      - name: Snapshot raw_capture baseline
-        if: env.STAGE == '2' && env.PROBE_ONLY != '1'
-        run: |
-          POD=$(kubectl -n data get pod -l app=postgres -o jsonpath='{.items[0].metadata.name}')
-          [ -n "$POD" ] || { echo "::error::no postgres pod"; exit 1; }
-          BASE=$(kubectl -n data exec -i "$POD" -- \
-            psql -U postgres -d treetracker -tAc "SELECT count(*) FROM field_data.raw_capture")
-          echo "RAW_CAPTURE_BASELINE=${BASE:-0}" >> "$GITHUB_ENV"
-          echo "raw_capture baseline = ${BASE:-0}"
+      # The stage-2 raw_capture baseline is now snapshotted INSIDE the emulator script,
+      # after the post-boot stack standup and before wdio uploads (boot-before-k3d).
+      # It is written to apps/e2e/test-artifacts/raw_capture_baseline.txt; the
+      # "Assert upload landed" step below reads that file.
 
       # EXPERIMENT: place the bundled test tree image as the virtualscene poster, so the
       # emulator's back camera "sees" a real tree (Exp A, amended). Absolute path required.
@@ -312,22 +298,33 @@ jobs:
           # the device log and on-fail state, then returns wdio's exit code. See the script header.
           script: bash scripts/run-emulator-e2e.sh
 
+      # Needs the backend (up now, stood up inside the emulator script) but NOT the
+      # emulator, so it runs AFTER the emulator step (boot-before-k3d). Backend proof
+      # that the REAL two-file upload pattern flows end to end, in both orders (happy
+      # path + orphan self-heal); the cheapest fidelity signal, gated to stage 1.
+      - name: Backend two-file acceptance
+        if: env.STAGE == '1' && env.PROBE_ONLY != '1'
+        run: ./k3s/route2-two-file-test.sh
+
       # Stage-2 fidelity assertion: the real APK's capture must have reached the DB.
       # The consumer inserts into bulk_tree_upload immediately, but the minute-cadenced
       # processor propagates it to field_data.raw_capture asynchronously - and the slower
       # real-camera flow shifts the upload past a processor cycle. So POLL for up to ~3
-      # minutes rather than checking once (a single check is racy).
+      # minutes rather than checking once (a single check is racy). The baseline was
+      # snapshotted by the emulator script before wdio uploaded (boot-before-k3d).
       - name: Assert upload landed (stage 2)
         if: env.STAGE == '2' && env.PROBE_ONLY != '1'
         run: |
+          BASELINE=$(cat apps/e2e/test-artifacts/raw_capture_baseline.txt 2>/dev/null || echo 0)
+          echo "raw_capture baseline (from emulator script) = ${BASELINE}"
           POD=$(kubectl -n data get pod -l app=postgres -o jsonpath='{.items[0].metadata.name}')
           [ -n "$POD" ] || { echo "::error::no postgres pod"; exit 1; }
           for i in $(seq 1 18); do
             NOW=$(kubectl -n data exec -i "$POD" -- \
               psql -U postgres -d treetracker -tAc "SELECT count(*) FROM field_data.raw_capture")
-            echo "[$i] raw_capture now = ${NOW:-0} (baseline ${RAW_CAPTURE_BASELINE})"
-            if [ "${NOW:-0}" -gt "${RAW_CAPTURE_BASELINE}" ]; then
-              echo "real-app upload landed: raw_capture grew ${RAW_CAPTURE_BASELINE} -> ${NOW}"
+            echo "[$i] raw_capture now = ${NOW:-0} (baseline ${BASELINE})"
+            if [ "${NOW:-0}" -gt "${BASELINE}" ]; then
+              echo "real-app upload landed: raw_capture grew ${BASELINE} -> ${NOW}"
               exit 0
             fi
             sleep 10

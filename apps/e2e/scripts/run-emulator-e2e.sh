@@ -70,6 +70,64 @@ BOUND=$(adb shell settings get secure enabled_accessibility_services 2>/dev/null
 echo "$BOUND" | grep -qE '^[a-zA-Z][a-zA-Z0-9_.]*[.][a-zA-Z0-9_.]*/[a-zA-Z0-9_.]+$' \
   || echo "::warning::a11y service not well-formed/bound ($BOUND); exposure may fall back to the flag-only path"
 
+# --- issue #23 NEXT ACTION 1: boot-before-k3d ---------------------------------
+# The a11y "boot lottery" is decided at GUEST BOOT and is stable afterwards: a
+# poisoned boot never recovers (spec retries on the SAME emulator always fail) and a
+# won boot stays won. The discriminator is a Pixel-Launcher ANR during boot under
+# host CPU pressure (see the AFK ledger, RES-6 + PHASE-4 finding). probe_only reaches
+# ~83% because it boots on a QUIET host; the full pipeline stalled at ~64% because the
+# k3d control plane was already contending for the shared 4-core runner DURING boot.
+# So the action above booted the emulator FIRST (the stack is not up yet). We now WAIT
+# for the a11y tree to actually expose (the lottery has resolved), and only THEN stand
+# up the backend. Onboarding-time contention is tolerable; boot-time contention is not.
+REPO_ROOT="${GITHUB_WORKSPACE:-$(cd "$(dirname "$0")/../../.." && pwd)}"
+if [ "${PROBE_ONLY:-}" != "1" ]; then
+  # Wait for UiAutomator to see a non-trivial tree = Compose semantics exposed = the
+  # boot won the lottery. Up to 90s; a winner exposes fast, a loser never will.
+  echo "== wait for a11y exposure before standing up the backend (boot-before-k3d) =="
+  # uiautomator dump FAILS or returns a trivial tree on a poisoned boot (the a11y
+  # bridge dropped - the exact #23 signature); it succeeds with a real hierarchy once
+  # the boot has won. Redirection runs ON THE DEVICE (quoted), reading the device file.
+  a11y_exposed=0
+  for _ in $(seq 1 30); do
+    if adb shell uiautomator dump /sdcard/settle.xml >/dev/null 2>&1; then
+      sz=$(adb shell "wc -c < /sdcard/settle.xml" 2>/dev/null | tr -d '\r ')
+      if [ "${sz:-0}" -gt 600 ] 2>/dev/null; then a11y_exposed=1; break; fi
+    fi
+    sleep 3
+  done
+  { echo "a11y_exposed_pre_standup=$a11y_exposed"; echo -n "host load: "; uptime; } \
+    | tee test-artifacts/pre-standup-settle.txt || true
+  if [ "$a11y_exposed" = 1 ]; then
+    echo "a11y exposed on the quiet boot; standing up the backend now"
+  else
+    echo "::warning::a11y NOT exposed within 90s on the quiet boot (boot likely lost the lottery); standing up anyway so the run fails with the usual diagnostics"
+  fi
+
+  echo "== stand up local stack post-boot (quiet boot preserved) =="
+  if ! ( cd "$REPO_ROOT" && ./k3s/up.sh capture && ./k3s/up.sh verify capture ); then
+    echo "::error::backend standup/verify failed after emulator boot"
+    exit 1
+  fi
+
+  if [ "${STAGE:-}" = "2" ]; then
+    # Stage-2 fidelity baseline MUST be captured before wdio uploads. The later
+    # "Assert upload landed" job step reads this file (the k3d kubeconfig up.sh wrote
+    # persists in the default location across job steps).
+    POD=$(kubectl -n data get pod -l app=postgres -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+    if [ -n "$POD" ]; then
+      BASE=$(kubectl -n data exec -i "$POD" -- \
+        psql -U postgres -d treetracker -tAc "SELECT count(*) FROM field_data.raw_capture" 2>/dev/null | tr -d '\r ')
+      echo "${BASE:-0}" > test-artifacts/raw_capture_baseline.txt
+      echo "raw_capture baseline = ${BASE:-0}"
+    else
+      echo "::warning::no postgres pod for the stage-2 baseline; defaulting to 0"
+      echo "0" > test-artifacts/raw_capture_baseline.txt
+    fi
+  fi
+fi
+# ------------------------------------------------------------------------------
+
 # Background helpers, all killed at the end:
 #  - logcat capture (CameraX bind path + the .local bypass Timber line);
 #  - GPS keep-alive: the emulator emits its default fix only ~3 min post-boot, but the
