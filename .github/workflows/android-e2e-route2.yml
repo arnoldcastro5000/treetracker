@@ -104,9 +104,11 @@ jobs:
           # issue #23 (root cause = emulator GUEST RAM starvation, fixed via ram-size 4096M below;
           # ~33%->~64%). Residual ~36% is host CPU contention at emulator boot + an irreducible
           # per-boot jank floor, so API-34 real-camera is BEST-EFFORT non-gating; the REQUIRED gate
-          # stays the deterministic API-30 .local pipeline. Short readiness gate = fail a lost boot
-          # fast (a winner's a11y exposes quickly; a loser never does).
-          echo "E2E_READINESS_TIMEOUT_MS=90000" >> "$GITHUB_ENV"
+          # stays the deterministic API-30 .local pipeline. Readiness gate raised 90s -> 300s: BBK-1
+          # (boot-before-k3d) showed a11y was healthy on the quiet boot but not yet queryable at
+          # app-launch, during/right after the k3d standup CPU burst. 300s tests whether the app's
+          # Compose a11y RECOVERS once that burst settles (rather than failing a possibly-transient stall).
+          echo "E2E_READINESS_TIMEOUT_MS=300000" >> "$GITHUB_ENV"
           # Spec retries disabled: the stall is a per-emulator-BOOT condition and retries reuse the
           # SAME emulator, so they cannot re-roll it. A fresh emulator (re-dispatch) is the only re-roll.
           echo "E2E_SPEC_RETRIES=0"             >> "$GITHUB_ENV"
