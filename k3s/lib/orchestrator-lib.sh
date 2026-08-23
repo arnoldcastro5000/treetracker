@@ -204,7 +204,19 @@ load_image() {
     # the original tag and the registry tag to keep the builder host's disk from filling over a run.
     docker image rm -f "$img" "$IMAGE_REGISTRY/$img" >/dev/null 2>&1 || true
   else
-    k3d image import "$img" -c "$CLUSTER" >/dev/null 2>&1 || die "k3d image import $img failed"
+    # k3d image import can exit 0 yet leave the image ABSENT from the node's containerd (an
+    # import/containerd visibility race). That silently breaks Never-policy pods - notably the
+    # bulk-pack-processor CronJob, which then ErrImageNeverPulls and, with concurrencyPolicy:
+    # Forbid, blocks every later tick and wedges the whole capture flow (standup passes; only the
+    # smoke catches it). So import, then VERIFY the image really landed in the node, retrying while
+    # the host Docker copy still exists; only drop that copy once the node confirms the image.
+    local i
+    for i in $(seq 1 5); do
+      k3d image import "$img" -c "$CLUSTER" >/dev/null 2>&1 || true
+      image_in_cluster "$img" && break
+      [ "$i" = 5 ] && die "k3d image import $img: image absent from the node after 5 attempts"
+      info "import $img: not visible in the node yet, retry $i"; sleep 3
+    done
     # k3d import COPIES the image into the node's containerd, so the host Docker copy is now
     # redundant, and on this stack host Docker and the k3d node share one /var/lib/docker device,
     # so keeping both stores every image twice. Left unchecked the app image builds push a small
