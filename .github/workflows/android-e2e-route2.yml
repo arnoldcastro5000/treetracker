@@ -29,6 +29,10 @@ on:
         description: "issue #23 tight loop: skip k3d/backend, run the backend-free a11y onboarding probe only"
         type: boolean
         default: false
+      capture_probe:
+        description: "API-32 camera tight loop: skip k3d/backend, onboard + REAL tree capture, assert the review screen (quiet-host camera test)"
+        type: boolean
+        default: false
   push:
     branches:
       - "**route2-e2e**"
@@ -99,6 +103,19 @@ jobs:
             echo "E2E_SKIP_ADMIN_VERIFY=1" >> "$GITHUB_ENV"
             echo "E2E_SKIP_RELAUNCH=1" >> "$GITHUB_ENV"
             echo "Resolved PROBE_ONLY (tight loop): onboarding a11y probe, no backend"
+            exit 0
+          fi
+          # API-32 camera tight loop: same backend-free path as probe_only (skip k3d, so the host is
+          # QUIET at the capture window), but onboard THEN take a REAL tree capture and assert the
+          # review screen. Green = takePicture completed quiet (stall was contention); red = stall
+          # persists quiet (an API-32 emulator HAL limit). Reuses PROBE_ONLY=1 to skip standup.
+          CAPTURE_PROBE="${{ github.event.inputs.capture_probe }}"
+          if [ "$CAPTURE_PROBE" = "true" ]; then
+            echo "PROBE_ONLY=1" >> "$GITHUB_ENV"
+            echo "E2E_SPEC=00b_capture_probe.feature" >> "$GITHUB_ENV"
+            echo "E2E_SKIP_ADMIN_VERIFY=1" >> "$GITHUB_ENV"
+            echo "E2E_SKIP_RELAUNCH=1" >> "$GITHUB_ENV"
+            echo "Resolved CAPTURE_PROBE (tight loop): onboard + real tree capture, no backend"
             exit 0
           fi
           # issue #23 (root cause = emulator GUEST RAM starvation, fixed via ram-size 4096M below;
