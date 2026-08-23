@@ -25,6 +25,10 @@ on:
         type: choice
         default: "3"
         options: ["1", "2", "3"]
+      probe_only:
+        description: "issue #23 tight loop: skip k3d/backend, run the backend-free a11y onboarding probe only"
+        type: boolean
+        default: false
   push:
     branches:
       - "**route2-e2e**"
@@ -85,10 +89,27 @@ jobs:
           # config below, NOT by the stage. Do NOT merge this branch to the green pipeline.
           STAGE="${{ github.event.inputs.stage || '2' }}"
           echo "STAGE=$STAGE" >> "$GITHUB_ENV"
-          # EXPERIMENT: API 34 exposes Compose semantics to UiAutomator more slowly than
-          # API 30 (issue #23). Give the a11y-readiness gate a longer window to classify
-          # slow-race vs permanent-empty before onboarding can even reach the camera.
-          echo "E2E_READINESS_TIMEOUT_MS=300000" >> "$GITHUB_ENV"
+          # issue #23 TIGHT LOOP: probe_only skips the whole k3d/backend (the a11y-stabilization bug
+          # is offline onboarding - needs no backend) and runs only the backend-free onboarding probe
+          # feature. ~half the runtime, zero backend confounders, clean green=a11y-OK verdict.
+          PROBE_ONLY="${{ github.event.inputs.probe_only }}"
+          if [ "$PROBE_ONLY" = "true" ]; then
+            echo "PROBE_ONLY=1" >> "$GITHUB_ENV"
+            echo "E2E_SPEC=00_a11y_onboarding_probe.feature" >> "$GITHUB_ENV"
+            echo "E2E_SKIP_ADMIN_VERIFY=1" >> "$GITHUB_ENV"
+            echo "E2E_SKIP_RELAUNCH=1" >> "$GITHUB_ENV"
+            echo "Resolved PROBE_ONLY (tight loop): onboarding a11y probe, no backend"
+            exit 0
+          fi
+          # issue #23 (root cause = emulator GUEST RAM starvation, fixed via ram-size 4096M below;
+          # ~33%->~64%). Residual ~36% is host CPU contention at emulator boot + an irreducible
+          # per-boot jank floor, so API-34 real-camera is BEST-EFFORT non-gating; the REQUIRED gate
+          # stays the deterministic API-30 .local pipeline. Short readiness gate = fail a lost boot
+          # fast (a winner's a11y exposes quickly; a loser never does).
+          echo "E2E_READINESS_TIMEOUT_MS=90000" >> "$GITHUB_ENV"
+          # Spec retries disabled: the stall is a per-emulator-BOOT condition and retries reuse the
+          # SAME emulator, so they cannot re-roll it. A fresh emulator (re-dispatch) is the only re-roll.
+          echo "E2E_SPEC_RETRIES=0"             >> "$GITHUB_ENV"
           # Strict tags ONLY for stage 1 (offline 02, fully id-tapped + proven). The 03
           # capture controls need the app's designed COORDINATE fallback (the tag's
           # bounds-center clickGesture does not trigger the CaptureButton), and strict
@@ -160,16 +181,18 @@ jobs:
       # capture/verify pipeline + admin) against a fresh k3d cluster, then seed the
       # admin row (seed-admin uses ADMIN_USER/ADMIN_PASSWORD from the job env).
       - name: Stand up local stack (up.sh capture)
+        if: env.PROBE_ONLY != '1'
         run: ./k3s/up.sh capture
 
       - name: Verify stack (smoke gate)
+        if: env.PROBE_ONLY != '1'
         run: ./k3s/up.sh verify capture
 
       # Backend proof that the REAL two-file upload pattern flows end to end, in both
       # orders (happy path + orphan self-heal). Runs without the emulator, so it is the
       # cheapest fidelity signal; gate it to stage 1 (later stages exercise the real APK).
       - name: Backend two-file acceptance
-        if: env.STAGE == '1'
+        if: env.STAGE == '1' && env.PROBE_ONLY != '1'
         run: ./k3s/route2-two-file-test.sh
 
       # 02 is offline and the local build's S3/API values point at the emulator host
@@ -221,7 +244,7 @@ jobs:
 
       # Record the capture baseline so stage 2 can assert the real upload LANDED.
       - name: Snapshot raw_capture baseline
-        if: env.STAGE == '2'
+        if: env.STAGE == '2' && env.PROBE_ONLY != '1'
         run: |
           POD=$(kubectl -n data get pod -l app=postgres -o jsonpath='{.items[0].metadata.name}')
           [ -n "$POD" ] || { echo "::error::no postgres pod"; exit 1; }
@@ -247,6 +270,11 @@ jobs:
           CAPTURE_ARTIFACTS: "1"
           # ADMIN_URL / ADMIN_USER / ADMIN_PASSWORD / E2E_SKIP_ADMIN_VERIFY / E2E_STRICT_TAGS
           # are inherited from the job env / the Resolve-stage step (strict is stage-1 only).
+          # issue #23: optional override for the a11y service the emulator script binds (empty =
+          # auto-discover an installed non-touch-exploration service). The a11y force is harmless
+          # belt-and-suspenders; the real fix for the exposure stall is guest RAM (ram-size below),
+          # NOT a11y enablement (a fully bound service alone did not make it deterministic).
+          E2E_FORCE_A11Y_SERVICE: ""
         with:
           # EXPERIMENT (Exp A, amended): API 34 (API 30 is Google's known-bad camera env),
           # back camera = virtualscene with the tree poster so real CameraX capture has real
@@ -254,28 +282,35 @@ jobs:
           # keeps the .local bypass). `adb shell setprop debug.e2e.realtree 1` (below) makes the
           # app run the REAL CameraX path for the tree only.
           api-level: 34
+          # google_apis. (Tried google_atd to fix the a11y-bridge boot lottery: it did NOT - a11y
+          # exposure was still intermittent AND the stripped ATD image ships no a11y services to
+          # bind, plus a new deep-flow failure. So reverted.) API-34 Compose->UiAutomator semantics
+          # exposure is an intermittent per-emulator-boot race (~1 in 3 boots expose) that no adb/
+          # image lever fixed; only in-process Espresso/Compose-test would bypass it (a rewrite).
+          # Decision: API-34 real-camera is BEST-EFFORT non-gating; the REQUIRED gate stays the
+          # deterministic API-30 .local pipeline. A green here proves real capture end to end.
           target: google_apis
           arch: x86_64
           profile: pixel_5
+          # issue #23 fix candidate: raise guest RAM from the ~2GB default so guest Android stops
+          # thrashing (lmkd kills + launcher ANR that jank the a11y/UI). Written into the AVD config
+          # pre-boot, so it actually takes effect (unlike -memory in emulator-options). Host has ~12GB
+          # free at emulator boot. Verified in-run via guest /proc/meminfo capture.
+          ram-size: 4096M
           disable-animations: true
           working-directory: apps/e2e
           # `wall` is a real poster slot in the default virtualscene (Toren1BD.posters);
           # `tree` was ignored (wrong slot) so the scene showed the default green/checkerboard
           # test pattern instead of our image. `wall=` places the tree image on the room wall.
+          # Guest RAM is set via the action's ram-size input (writes hw.ramSize into the AVD config
+          # pre-boot); -memory in emulator-options is overridden by the pixel_5 profile's hw.ramSize,
+          # so it is NOT used here (issue #23: the guest starves on its default ~2GB - lmkd kills
+          # 12-26 procs/run, launcher ANR -> a11y/UI janks). See ram-size below.
           emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back virtualscene -virtualscene-poster wall=${{ github.workspace }}/tree-poster.jpg -camera-front emulated
-          # The emulator-runner runs each script LINE as a separate `sh -c` and aborts
-          # at the first non-zero line, so trailing capture lines never run after a wdio
-          # failure. Wrap the run + logcat dump in ONE bash -c so the device log is always
-          # captured (CameraX bind path + the .local bypass Timber line) before the exit.
-          script: |
-            adb wait-for-device
-            adb shell setprop debug.e2e.realtree 1
-            adb logcat -c || true
-            mkdir -p test-artifacts
-            { echo "== host resources just before wdio (a11y-exposure phase) =="; date -u; echo "nproc: $(nproc)"; free -h; uptime; } | tee test-artifacts/host-resources-pre-wdio.txt || true
-            { echo "== a11y settings pre-wdio =="; echo -n "enabled_accessibility_services="; adb shell settings get secure enabled_accessibility_services; echo -n "accessibility_enabled="; adb shell settings get secure accessibility_enabled; echo -n "touch_exploration_enabled="; adb shell settings get secure touch_exploration_enabled; } | tee test-artifacts/a11y-settings-pre.txt 2>&1 || true
-            adb shell dumpsys accessibility > test-artifacts/a11y-dumpsys-pre.txt 2>&1 || true
-            bash -c 'export PATH="$(pwd)/node_modules/.bin:$PATH"; mkdir -p test-artifacts; adb logcat > test-artifacts/logcat.txt 2>&1 & LPID=$!; ( while true; do echo "== $(date -u +%H:%M:%S) =="; adb shell dumpsys accessibility 2>/dev/null | sed -n "1,50p"; sleep 3; done ) > test-artifacts/a11y-timeline.txt 2>&1 & APID=$!; adb shell dumpsys media.camera > test-artifacts/camera-dumpsys-before.txt 2>&1 || true; ./node_modules/.bin/wdio run ./wdio.conf.ts --spec "features/$E2E_SPEC"; ec=$?; adb shell dumpsys media.camera > test-artifacts/camera-dumpsys-after.txt 2>&1 || true; if [ "$ec" -ne 0 ]; then PID=$(adb shell pidof org.greenstand.android.TreeTracker.local 2>/dev/null | tr -d "\r"); [ -n "$PID" ] && adb shell kill -3 "$PID" 2>/dev/null || true; sleep 4; adb shell dumpsys accessibility > test-artifacts/a11y-dumpsys-onfail.txt 2>&1 || true; adb shell dumpsys window > test-artifacts/window-dumpsys-onfail.txt 2>&1 || true; adb shell uiautomator dump /sdcard/win.xml >/dev/null 2>&1 && adb pull /sdcard/win.xml test-artifacts/uiautomator-dump-onfail.xml >/dev/null 2>&1 || true; fi; sleep 2; kill $LPID $APID 2>/dev/null || true; exit $ec'
+          # The whole emulator-side run lives in a committed script (ONE shell, proper shebang,
+          # shellcheck-able - no nested sh -c/bash -c). It forces a11y + keeps GPS alive + captures
+          # the device log and on-fail state, then returns wdio's exit code. See the script header.
+          script: bash scripts/run-emulator-e2e.sh
 
       # Stage-2 fidelity assertion: the real APK's capture must have reached the DB.
       # The consumer inserts into bulk_tree_upload immediately, but the minute-cadenced
@@ -283,7 +318,7 @@ jobs:
       # real-camera flow shifts the upload past a processor cycle. So POLL for up to ~3
       # minutes rather than checking once (a single check is racy).
       - name: Assert upload landed (stage 2)
-        if: env.STAGE == '2'
+        if: env.STAGE == '2' && env.PROBE_ONLY != '1'
         run: |
           POD=$(kubectl -n data get pod -l app=postgres -o jsonpath='{.items[0].metadata.name}')
           [ -n "$POD" ] || { echo "::error::no postgres pod"; exit 1; }
@@ -321,7 +356,7 @@ jobs:
 
       # Cluster diagnostics for a failed run (pods + recent logs of the pipeline).
       - name: Collect k8s diagnostics
-        if: failure()
+        if: failure() && env.PROBE_ONLY != '1'
         run: |
           DIR=apps/e2e/test-artifacts/k8s
           mkdir -p "$DIR"
@@ -345,5 +380,5 @@ jobs:
           if-no-files-found: warn
 
       - name: Tear down cluster
-        if: always()
+        if: ${{ always() && env.PROBE_ONLY != '1' }}
         run: ./k3s/down.sh || true

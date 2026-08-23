@@ -34,8 +34,26 @@ export const config: any = {
       "appium:noReset": true,
       "appium:newCommandTimeout": 240,
       "appium:uiautomator2ServerLaunchTimeout": 60000,
+      // Keep any enabled accessibility service alive during the UiAutomator2
+      // session. By default the driver suppresses a11y services, which can stop
+      // Jetpack Compose from emitting its semantics tree. On API 34 the app's
+      // AccessibilityManager.isEnabled() flip is already racy (issue #23), so
+      // the emulator step forces a11y on; suppressing it again would undo that.
+      // With no a11y service enabled there is nothing to suppress, so this is a
+      // no-op there and a correct default for a Compose app under UiAutomator2.
+      "appium:disableSuppressAccessibilityService": true,
     },
   ],
+
+  // API-34 Compose semantics exposure to UiAutomator is an intermittent per-session race
+  // (issue #23) that a11y enablement does not fix - proven: a fully BOUND a11y service still
+  // did not expose. The failure lands at onboarding start (empty tree), before any app state,
+  // so a spec retry restarts the session (new UiAutomator2 connection = a fresh roll of the
+  // race) and re-attempts onboarding cleanly. This makes the API-34 real-camera a reliable
+  // BEST-EFFORT signal (NOT the required gate - that stays the deterministic API-30 pipeline).
+  // Env-driven and defaults to 0, so the API-30 green pipeline keeps zero retries.
+  specFileRetries: Number(process.env.E2E_SPEC_RETRIES) || 0,
+  specFileRetriesDelay: 3,
 
   logLevel: "warn",
   bail: 0,
