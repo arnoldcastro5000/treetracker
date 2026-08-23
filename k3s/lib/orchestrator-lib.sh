@@ -274,7 +274,14 @@ finish_deploy() {   # $1 ns  $2 deploy  $3 force-roll(0|1: rebuilt image or chan
     info "$dep: $why -> rollout restart"
     k -n "$ns" rollout restart "deploy/$dep" >/dev/null 2>&1 || true
   fi
-  k -n "$ns" rollout status "deploy/$dep" --timeout="${ROLLOUT_TIMEOUT}s"
+  if ! k -n "$ns" rollout status "deploy/$dep" --timeout="${ROLLOUT_TIMEOUT}s"; then
+    # Transient standup races (k3d image-import visibility, pod scheduling) can leave a pod in
+    # ImagePullBackOff or unready within the window. Restart once and re-wait before giving up;
+    # a genuinely broken deploy still fails on the second wait. (issue #23 AFK determinism.)
+    info "$dep: not ready within ${ROLLOUT_TIMEOUT}s -> rollout restart + retry once"
+    k -n "$ns" rollout restart "deploy/$dep" >/dev/null 2>&1 || true
+    k -n "$ns" rollout status "deploy/$dep" --timeout="${ROLLOUT_TIMEOUT}s"
+  fi
 }
 
 # ── node / db-migrate ─────────────────────────────────────────────────────────

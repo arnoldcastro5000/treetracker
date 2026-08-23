@@ -48,7 +48,14 @@ patches:
       apiVersion: rbac.authorization.k8s.io/v1
       kind: ClusterRoleBinding
       metadata: { name: k8s-wait-for }
+  # The local image is built and imported to k3d before apply, so never fall back to a registry
+  # pull: IfNotPresent races the import-visibility and lands ImagePullBackOff -> waitFor timeout
+  # (seen in the #23 AFK determinism run). Never = use the imported image only. Matches the
+  # bulk-pack-processor precedent.
   - target: { kind: Deployment, name: treetracker-field-data }
     patch: |-
       - op: remove
         path: /spec/template/spec/affinity
+      - op: add
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: Never
