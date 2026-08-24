@@ -225,6 +225,13 @@ jobs:
           target: google_apis
           arch: x86_64
           profile: pixel_5
+          # issue #23 fix, ported from the real-camera branches: raise guest RAM from the
+          # pixel_5 default ~2GB so guest Android stops kill/respawn-thrashing its Google
+          # leaf apps at boot (run 32682252289 attempt 1: ~52 signal-9 deaths in the boot
+          # window = the 2GB pressure signature; the same churn measured on API 32/33/34).
+          # 4096M is the MEASURED sweet spot (2GB ~33% a11y on API 34, 4GB ~64%, 6GB WORSE -
+          # host over-allocation feeds back as jank). Written into the AVD config pre-boot.
+          ram-size: 4096M
           disable-animations: true
           working-directory: apps/e2e
           emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back emulated -camera-front emulated
