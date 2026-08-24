@@ -278,6 +278,44 @@ jobs:
              "${{ github.workspace }}/tree-poster.jpg"
           ls -l "${{ github.workspace }}/tree-poster.jpg"
 
+      # ROUTE 1 (research doc 24, custom-image research): cached PRE-STRIPPED AVD.
+      # `pm disable-user` state persists in userdata (package-restrictions.xml) and AOSP 14
+      # confirms disabled packages are fully DORMANT at the next cold boot (no BOOT_COMPLETED,
+      # no jobs, no process start). So: restore the AVD dir from cache; on a miss, the step
+      # below boots a fresh AVD once, runs strip-guest.sh, and shuts down - and the post-job
+      # cache save stores the stripped AVD. Either way, the main emulator step then COLD-BOOTS
+      # a pre-stripped guest (force-avd-creation: false reuses the AVD; -no-snapshot = cold
+      # boot, so no proprietary quickboot RAM snapshot ever enters the repo-scoped cache -
+      # the cached delta is config + userdata only, zero Google binaries). The cache key
+      # hashes strip-guest.sh, so editing the strip list regenerates the AVD. On a cache-miss
+      # run the measurement is STILL valid: the run generates its own stripped AVD, then the
+      # test step cold-boots it.
+      - name: AVD cache (pre-stripped)
+        id: avd-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.android/avd/*
+            ~/.android/adb*
+          key: avd-v1-api34-google_apis-x86_64-pixel5-ram4096-${{ hashFiles('apps/e2e/scripts/strip-guest.sh') }}
+
+      - name: Generate pre-stripped AVD (cache miss only)
+        if: steps.avd-cache.outputs.cache-hit != 'true'
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          # MUST match the main step's AVD config exactly (same AVD name "test" is reused).
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          profile: pixel_5
+          ram-size: 4096M
+          disable-animations: true
+          force-avd-creation: false
+          working-directory: apps/e2e
+          # Minimal boot: no camera/poster needed to strip; -no-snapshot = no quickboot save.
+          emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+          script: bash scripts/strip-guest.sh
+
       - name: Run E2E on emulator
         uses: reactivecircus/android-emulator-runner@v2
         env:
@@ -319,6 +357,10 @@ jobs:
           # free at emulator boot. Verified in-run via guest /proc/meminfo capture.
           ram-size: 4096M
           disable-animations: true
+          # Route 1: reuse the pre-stripped AVD (restored from cache or generated above)
+          # instead of force-recreating - the whole point is booting a guest whose heavy
+          # packages are ALREADY disabled, so their boot-time churn never happens.
+          force-avd-creation: false
           working-directory: apps/e2e
           # `wall` is a real poster slot in the default virtualscene (Toren1BD.posters);
           # `tree` was ignored (wrong slot) so the scene showed the default green/checkerboard
