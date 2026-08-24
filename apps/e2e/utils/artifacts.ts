@@ -28,9 +28,16 @@ export async function beginScreenRecording(): Promise<void> {
   if (!enabled()) return;
   stepIndex = 0;
   try {
-    // Android caps at ~3 min per segment; timeLimit 1800 lets Appium chunk and
-    // stitch. forceRestart drops any recording left over from a prior scenario.
-    await browser.startRecordingScreen({ timeLimit: 1800, forceRestart: true } as never);
+    // Android `screenrecord` caps at 180s per file. A longer timeLimit makes Appium
+    // record multiple segments and merge them with ffmpeg on stop; the CI runner has
+    // no ffmpeg, so that merge fails and Appium returns only the last (near-empty)
+    // segment - an intermittent near-0s video whenever the scenario runs past 180s
+    // (the `/verify` poll pushes it there). So cap at one 180s segment: no merge, no
+    // dependency. The on-device work (onboard -> capture -> upload) finishes well
+    // inside 180s; the dropped tail is the emulator sitting idle while `/verify`
+    // polls in desktop Chrome, which the emulator video cannot show anyway.
+    // forceRestart drops any recording left over from a prior scenario.
+    await browser.startRecordingScreen({ timeLimit: 180, forceRestart: true } as never);
   } catch {
     // driver has no screen recording (or not a mobile session), skip silently
   }
