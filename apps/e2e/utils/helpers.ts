@@ -658,28 +658,24 @@ export async function ensureOnDashboard(): Promise<void> {
   await dismissSystemDialogsIfPresent();
 
   // ── Selfie Tutorial Dialog ───────────────────────────────────────────────
-  // SelfieScreen shows a tutorial ("Click on ... to take a selfie...") whose
-  // dismiss control is a checkmark (TreeTrackerButton, contentDescription=null)
-  // at the dialog's bottom-centre. Tap by coordinate until the tutorial is gone.
-  if (await isVisibleWithTimeout("Click on", 8000)) {
-    const dismissed = async () => !(await isVisible("Click on"));
-    // Tag-first: the real dismiss control is scoped "tutorial-dismiss" (the selfie
-    // tutorial also renders demo ApprovalButtons, so the plain "approve" id collides
-    // there, hence a dedicated tag).
-    if (!(await tapTagUntil(Tags.TUTORIAL_DISMISS, dismissed, "dismissSelfieTutorial"))) {
-      tagFallback("dismissSelfieTutorial", Tags.TUTORIAL_DISMISS);
-      // Fallback: the tutorial is a Material AlertDialog centred on screen (bounds
-      // ~[100,635][980,1717]); its dismiss checkmark sits at the dialog's
-      // bottom-centre, ~0.5w x 0.69h, NOT at the screen bottom.
-      await tapFractionUntil(0.5, 0.69, dismissed, "dismissSelfieTutorial");
-    }
-  }
+  // SelfieScreen shows the SAME shared Tutorial composable as the capture flow
+  // (tag "tutorial-dismiss", checkmark at ~0.5w x 0.69h), so reuse its dismisser.
+  // 20s appear budget: gate runs 32682252289/32683953355 proved the a11y tree can
+  // serve the dialog's subtree LATE and intermittently right after the screen
+  // renders (67 no-such-element / 1 found inside the old 8s window, while the
+  // dialog was visibly on screen) - the old 8s gate then SKIPPED the dismiss and
+  // every later tap landed in the tutorial's tap-eating scrim.
+  await dismissCaptureTutorialIfPresent(20000);
 
   // ── Selfie Screen ────────────────────────────────────────────────────────
   // The CaptureButton is the bottom ActionBar's centre action (no queryable
   // node), at ~0.5w x 0.88h. Capturing navigates to the review screen, so retry
   // until the page changes (the a11y tree is stable except for that navigation).
   if (!(await isVisible("UPLOAD"))) {
+    // Late-appear guard (mirrors captureTree): if the tutorial only became
+    // servable after the gate above gave up, dismiss it now so the capture
+    // taps below cannot be eaten by its scrim.
+    await dismissCaptureTutorialIfPresent(1500);
     const beforeCapture = await safeSource();
     const captured = async () =>
       (await isVisible("UPLOAD")) || (await safeSource()) !== beforeCapture;
@@ -695,6 +691,8 @@ export async function ensureOnDashboard(): Promise<void> {
   // Reject/approve are a centred ApprovalButton pair (no queryable node); the
   // approval (right) button sits at ~0.6w x 0.9h. Retry until the dashboard shows.
   if (!(await isVisible("UPLOAD"))) {
+    // Same late-appear guard as the selfie block: never tap into the tutorial scrim.
+    await dismissCaptureTutorialIfPresent(1500);
     const onDashboard = async () => await isVisible("UPLOAD");
     // Tag-first: the review approve control is an ApprovalButton, tagged "approve".
     if (!(await tapTagUntil(Tags.APPROVE, onDashboard, "approveSelfie"))) {
