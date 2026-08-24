@@ -293,16 +293,16 @@ jobs:
           # NOT a11y enablement (a fully bound service alone did not make it deterministic).
           E2E_FORCE_A11Y_SERVICE: ""
         with:
-          # EXPERIMENT (API-33 probe, issue #23): API 33 (Android 13). Emulator-API ladder for the
-          # real-camera goal: API 30 = known-bad camera; API 32 = a11y deterministic but the virtualscene
-          # still-capture (ImageCapture.takePicture) never completes even on a quiet host (HAL limit);
-          # API 34 = camera works but a11y is a per-boot lottery. API 33 is the untested middle - does it
-          # get BOTH working real camera AND reliable a11y? Same clean 6346ad7 baseline + import-harden,
-          # api-level is the ONLY functional variable. back camera = virtualscene with the tree poster so
-          # real CameraX capture has real content. Front camera stays `emulated` (virtualscene is
-          # back-lens only; the selfie keeps the .local bypass). `adb shell setprop debug.e2e.realtree 1`
-          # (below) makes the app run the REAL CameraX path for the tree only.
-          api-level: 33
+          # EXPERIMENT (API-34 + guest STRIP, issue #23): the lead from the emulator-API sweep. Ladder:
+          # API 30 = bad camera; API 32/33 = a11y OK (100% with strip) but still-capture HAL-broken;
+          # API 34 = the ONLY level with WORKING real camera, but a11y was a ~64% per-boot lottery. That
+          # lottery is the SAME guest-resource-pressure symptom the strip FIXED on API 33 (5/6 -> 6/6). So
+          # this pairs API 34's working camera with the guest strip (run-emulator-e2e.sh disables heavy
+          # leaf apps post-boot) to test for BOTH deterministic a11y AND real capture = the goal. Clean
+          # 6346ad7 baseline + import-harden + strip; api-level is the only camera-env variable. back
+          # camera = virtualscene with the tree poster; front `emulated`; debug.e2e.realtree=1 = REAL
+          # CameraX for the tree.
+          api-level: 34
           # google_apis. (Tried google_atd to fix the a11y-bridge boot lottery: it did NOT - a11y
           # exposure was still intermittent AND the stripped ATD image ships no a11y services to
           # bind, plus a new deep-flow failure. So reverted.) API-34 Compose->UiAutomator semantics
