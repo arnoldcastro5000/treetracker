@@ -242,7 +242,7 @@ jobs:
           script: |
             adb wait-for-device
             adb logcat -c || true
-            bash -c 'export PATH="$(pwd)/node_modules/.bin:$PATH"; mkdir -p test-artifacts; adb logcat > test-artifacts/logcat.txt 2>&1 & LPID=$!; ./node_modules/.bin/wdio run ./wdio.conf.ts --spec "features/$E2E_SPEC"; ec=$?; sleep 2; kill $LPID 2>/dev/null || true; exit $ec'
+            bash -c 'export PATH="$(pwd)/node_modules/.bin:$PATH"; mkdir -p test-artifacts; adb logcat > test-artifacts/logcat.txt 2>&1 & LPID=$!; ./node_modules/.bin/wdio run ./wdio.conf.ts --spec "features/$E2E_SPEC"; ec=$?; sleep 2; kill $LPID 2>/dev/null || true; mkdir -p test-artifacts/resources; { echo "== guest /proc/meminfo =="; adb shell cat /proc/meminfo; echo "== guest /proc/loadavg =="; adb shell cat /proc/loadavg; echo "== guest cpu core count =="; adb shell cat /proc/cpuinfo | grep -c ^processor; echo "== guest top =="; adb shell top -b -n 1 2>/dev/null | head -20; echo "== guest df =="; adb shell df; echo "== app dumpsys meminfo =="; adb shell dumpsys meminfo org.greenstand.android.TreeTracker.local 2>/dev/null | head -40; } > test-artifacts/resources/android-vm.txt 2>&1 || true; exit $ec'
 
       # Stage-2 fidelity assertion: the real APK's capture must have reached the DB.
       - name: Assert upload landed (stage 2)
@@ -289,6 +289,34 @@ jobs:
             echo '```'
           } | tee "$DIR/components.txt" >> "$GITHUB_STEP_SUMMARY"
           kubectl get svc -A > "$DIR/services.txt" 2>&1 || true
+
+      # Always-on resource utilization report: the runner (host) resources captured
+      # live here, plus the Android VM (guest) snapshot captured during the emulator
+      # step (adb is gone once that step ends, so the guest half is read from the file
+      # the emulator step wrote). Helps correlate the known boot-window guest kill-churn
+      # flake with host contention. Best-effort: it never fails the run.
+      - name: Resource utilization report
+        if: always()
+        run: |
+          DIR=apps/e2e/test-artifacts/resources
+          mkdir -p "$DIR"
+          {
+            echo "### Resource utilization (stage ${STAGE:-?})"
+            echo
+            echo "#### Runner (host)"
+            echo '```'
+            echo "CPUs: $(nproc)"
+            echo "-- load average --"; cat /proc/loadavg
+            echo "-- memory --"; free -h
+            echo "-- disk (/) --"; df -h /
+            echo "-- top processes by RSS --"; ps -eo pid,pcpu,pmem,rss,comm --sort=-rss 2>/dev/null | head -12
+            echo '```'
+            echo
+            echo "#### Android VM (guest, captured during the emulator step)"
+            echo '```'
+            if [ -f "$DIR/android-vm.txt" ]; then cat "$DIR/android-vm.txt"; else echo "(not captured: the emulator step did not run)"; fi
+            echo '```'
+          } | tee "$DIR/report.txt" >> "$GITHUB_STEP_SUMMARY"
 
       # Cluster diagnostics for a failed run (pods + recent logs of the pipeline).
       - name: Collect k8s diagnostics
