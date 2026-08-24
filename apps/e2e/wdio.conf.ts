@@ -12,6 +12,11 @@ import {
   perfEndStep,
   perfEndScenario,
 } from "./utils/perf";
+import {
+  journeyBeginScenario,
+  journeyRecordStep,
+  journeyEndScenario,
+} from "./utils/journey";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const config: any = {
@@ -93,6 +98,7 @@ export const config: any = {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   beforeScenario: async function (world: any) {
     perfBeginScenario(world?.pickle?.name || "scenario");
+    journeyBeginScenario(world);
     await perfResetDevice();
     await beginScreenRecording();
   },
@@ -103,6 +109,7 @@ export const config: any = {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   afterStep: async function (step: any, _scenario: any, result: any) {
     perfEndStep(step?.text || "", result?.passed !== false);
+    journeyRecordStep(step?.text || "", result?.passed !== false);
     await saveStepScreenshot(step?.text || "step");
     // On a step failure, dump the UI hierarchy to stdout so the CI log (always
     // reachable) shows exactly what was on screen and the real element ids,
@@ -129,6 +136,7 @@ export const config: any = {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   afterScenario: async function (world: any) {
     await perfEndScenario();
+    journeyEndScenario();
     await endScreenRecording(world?.pickle?.name || "scenario");
   },
 };

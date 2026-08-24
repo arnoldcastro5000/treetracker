@@ -259,6 +259,18 @@ jobs:
           fi
           echo "real-app upload landed: raw_capture grew ${RAW_CAPTURE_BASELINE} -> ${NOW}"
 
+      # Always-on Capture Journey report: joins the scattered per-hop signals of the run
+      # (cucumber steps, logcat Timber lines, the pipeline DB tables keyed by the note
+      # fingerprint) into one ordered table that pinpoints where the capture stopped.
+      # Placed BEFORE the Component status step so its summary block renders on top, and
+      # before teardown so the DB is still queryable. Best-effort: it never fails the run.
+      - name: Capture Journey report
+        if: always()
+        working-directory: apps/e2e
+        run: |
+          bash scripts/collect-journey-probes.sh || true
+          node utils/capture-journey.mjs || true
+
       # Always-on component status roster (success or fail), captured while the cluster is
       # still up (before teardown): every pod + deployment readiness, to the artifacts AND
       # the run summary page so each run is self-documenting and the health of every

@@ -27,6 +27,7 @@ import {
 } from "../../utils/helpers";
 import { Tags, byTag } from "../../utils/tags";
 import { verifyCaptureOnAdmin, stopChromedriver } from "../../utils/admin";
+import { journeySetFingerprint } from "../../utils/journey";
 
 // ─── Scenario state (cucumber World) ──────────────────────────────────────────
 
@@ -35,6 +36,7 @@ import { verifyCaptureOnAdmin, stopChromedriver } from "../../utils/admin";
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 Before(function (this: any) {
   this.fingerprint = `e2e-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  journeySetFingerprint(this.fingerprint);
 });
 
 AfterAll(async function () {
