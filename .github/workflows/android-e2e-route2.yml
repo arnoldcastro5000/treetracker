@@ -222,7 +222,14 @@ jobs:
           # are inherited from the job env / the Resolve-stage step (strict is stage-1 only).
         with:
           api-level: 30
-          target: google_apis
+          # EXPERIMENT (probe/route2-e2e-aosp only, ticket 27): non-GMS AOSP image. The gate
+          # runs google_apis; this branch runs `default` (pure AOSP, NO Google Mobile Services)
+          # to test whether the ~50-59 signal-9 boot kill-churn + Pixel Launcher ANR come from
+          # GMS leaf apps thrashing at boot. The app needs no GMS at runtime (GPS=AOSP
+          # LocationManager, maps=MapLibre, upload=AWS; only Firebase touches GMS and no-ops
+          # gracefully). DISTINCT from google_atd (which kept GMS core and did not help).
+          # Single variable: api-30 / x86_64 / pixel_5 / ram 4096M all unchanged from the gate.
+          target: default
           arch: x86_64
           profile: pixel_5
           # issue #23 fix, ported from the real-camera branches: raise guest RAM from the
