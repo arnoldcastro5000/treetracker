@@ -25,6 +25,27 @@ adb wait-for-device
 adb shell setprop debug.e2e.realtree 1 || true
 adb logcat -c || true
 
+# --- issue #23: strip heavy guest apps to free RAM/CPU (target: 100% a11y) ------
+# The residual a11y-stall (probe_only ~83% on API 33) is guest resource pressure: the
+# full google_apis image runs Gmail/Photos/Maps/Messaging/Velvet(Icing)/etc, thrashing
+# lmkd and ANRing the launcher, which janks the Compose a11y bridge. Disable heavy LEAF
+# apps after boot to free headroom. KEEP GMS core (com.google.android.gms - the .local
+# build needs Firebase + fused location for the capture-screen GPS gate), the launcher,
+# and TTS/accessibility. E2E_STRIP_PKGS overrides the default set (space-separated).
+STRIP_DEFAULT="com.google.android.gm com.google.android.apps.messaging com.google.android.apps.photos com.google.android.apps.maps com.google.android.youtube com.google.android.googlequicksearchbox com.google.android.syncadapters.contacts com.google.android.ims com.android.chrome com.google.android.calendar com.google.android.apps.docs com.google.android.videos com.google.android.deskclock com.google.android.apps.wellbeing"
+STRIP_PKGS="${E2E_STRIP_PKGS:-$STRIP_DEFAULT}"
+echo "== stripping heavy guest packages (issue #23 headroom) =="
+for pkg in $STRIP_PKGS; do
+  if adb shell pm disable-user --user 0 "$pkg" >/dev/null 2>&1; then
+    echo "  disabled $pkg"; adb shell am force-stop "$pkg" >/dev/null 2>&1 || true
+  else
+    echo "  (skip $pkg: absent or not disableable)"
+  fi
+done
+{ echo "== guest meminfo AFTER strip =="; adb shell cat /proc/meminfo 2>/dev/null | grep -E 'MemTotal|MemAvailable'; } \
+  | tee test-artifacts/guest-meminfo-after-strip.txt || true
+# ------------------------------------------------------------------------------
+
 a11y_settings() {
   echo -n "enabled_accessibility_services="; adb shell settings get secure enabled_accessibility_services
   echo -n "accessibility_enabled=";          adb shell settings get secure accessibility_enabled
