@@ -16,6 +16,9 @@ DISK_WARN_PCT="${DISK_WARN_PCT:-80}"          # warn (only) before a build once 
 # Deployment rollout wait. Must be >= the slowest legitimate first-boot (Keycloak's startupProbe budget
 # is 300s: Liquibase + realm import on a cold Postgres), so a slow-but-healthy start is not failed.
 ROLLOUT_TIMEOUT="${ROLLOUT_TIMEOUT:-300}"
+# Fresh-cluster API/OpenAPI/node readiness window (up.sh step_cluster poll; scaled by
+# RETRY_BUDGET_SCALE). Widen on slow hardware.
+CLUSTER_READY_TIMEOUT="${CLUSTER_READY_TIMEOUT:-180}"
 
 # TT_ROOT = the treetracker repo root; K3S_DIR = its k3s/ dir. Derived from this file's location
 # (k3s/lib/) unless the caller already exported them.
@@ -109,6 +112,13 @@ info() { echo "${c_dim}  $*${c_off}"; }
 warn() { echo "${c_ylw}⚠ $*${c_off}" >&2; }
 die()  { echo "${c_red}✖ $*${c_off}" >&2; exit 1; }
 
+# ── Retry (shared seam; ticket 28) ────────────────────────────────────────────
+# Sourced after Logging so retry's messages use this script's warn(). One knob scales
+# every deadline: volunteers on a slow link raise it (RETRY_BUDGET_SCALE=3), CI turns it
+# down. ENV=ci defaults tighter because a CI minute is budgeted; local time is cheap.
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/retry.sh"
+if [ -z "${RETRY_BUDGET_SCALE:-}" ] && [ "$ENV" = ci ]; then RETRY_BUDGET_SCALE=0.6; fi
+
 # Every domain up.sh downloads from, named in the block hint below.
 NET_HINT_DOMAINS="registry-1.docker.io auth.docker.io quay.io app.getambassador.io datawire-static-files.s3.amazonaws.com registry.npmjs.org registry.yarnpkg.com"
 
@@ -181,18 +191,19 @@ start_pf() {
 stop_pf() { [ -n "$PF_PID" ] && kill "$PF_PID" 2>/dev/null || true; PF_PID=""; }
 
 # ── Images ────────────────────────────────────────────────────────────────────
-ensure_image() {   # pull on host (retry transient EOF) if absent, then load into cluster
-  local img="$1" i
+_docker_pull_quiet() { docker pull "$1" >/dev/null 2>&1; }
+ensure_image() {   # pull on host (retry transients) if absent, then load into cluster
+  local img="$1"
   if ! build_needed "$img"; then info "$img present in cluster -> skip pull"; return 0; fi
   if ! docker image inspect "$img" >/dev/null 2>&1; then
-    for i in $(seq 1 10); do
-      docker pull "$img" >/dev/null 2>&1 && break
-      # A firewall block is deterministic and won't clear on retry, detect it on the first failed
-      # attempt and fail fast with the real cause instead of spending the whole retry budget.
-      [ "$i" = 1 ]  && net_check_die "docker pull $img" "$(image_registry_host "$img")"
-      [ "$i" = 10 ] && die "docker pull $img failed after 10 attempts (transient registry error, rerun, or check: docker pull $img)"
-      info "pull $img: retry $i"; sleep 5
-    done
+    # Deadline-budgeted retry with jitter (ticket 28). The probe runs once after the first
+    # failure: a firewall block is deterministic, so net_check_die exits with the real cause
+    # instead of burning the budget. The attempt timeout kills a hung pull (dead connection);
+    # a slow-but-alive link raises RETRY_BUDGET_SCALE, which widens both.
+    RETRY_ATTEMPT_TIMEOUT=150 \
+    RETRY_PROBE="net_check_die 'docker pull $img' $(image_registry_host "$img")" \
+      retry 300 "docker pull $img" _docker_pull_quiet "$img" \
+      || die "docker pull $img failed (transient registry error: rerun, raise RETRY_BUDGET_SCALE, or check: docker pull $img)"
   fi
   load_image "$img"
 }

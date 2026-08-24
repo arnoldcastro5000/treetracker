@@ -71,7 +71,16 @@ if [ "$MODE" = namespaces ]; then
 elif [ "$ENV" = local ]; then
   if k3d cluster list 2>/dev/null | grep -q "^$CLUSTER "; then
     log "deleting k3d cluster '$CLUSTER' (all pods + data)"
-    k3d cluster delete "$CLUSTER"
+    # Retried (ticket 28): a delete can flake transiently (containerd/docker busy teardown);
+    # a failed delete leaves the env half-down, which the retry self-heals. The retried
+    # operation converges on "gone": a partial delete can make a later attempt fail with
+    # "no such cluster" even though the goal state is reached, so success = delete OK or
+    # the cluster no longer listed (keeps the operation idempotent, spec principle 5).
+    _k3d_delete_converged() {
+      k3d cluster delete "$CLUSTER" || ! k3d cluster list 2>/dev/null | grep -q "^$CLUSTER "
+    }
+    retry 60 "k3d cluster delete $CLUSTER" _k3d_delete_converged \
+      || die "k3d cluster delete '$CLUSTER' failed (retry budget spent) - rerun ./k3s/down.sh"
   else
     log "k3d cluster '$CLUSTER' not present"
   fi

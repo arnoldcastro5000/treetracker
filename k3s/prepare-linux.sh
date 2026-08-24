@@ -25,6 +25,16 @@ info() { echo "${c_dim}  $*${c_off}"; }
 warn() { echo "${c_yel}! $*${c_off}"; }
 die()  { echo "${c_red}x $*${c_off}" >&2; exit 1; }
 
+# Shared retry seam (ticket 28) - sourced after the logging defs so its messages use this
+# script's warn(). RETRY_BUDGET_SCALE widens every budget on a slow host or link; ENV=ci
+# defaults tighter (matching orchestrator-lib.sh) because a CI minute is budgeted.
+. "$ROOT/k3s/lib/retry.sh"
+if [ -z "${RETRY_BUDGET_SCALE:-}" ] && [ "${ENV:-local}" = ci ]; then RETRY_BUDGET_SCALE=0.6; fi
+# Per-attempt transfer ceiling for downloads, scaled by the same knob so a slow link widens
+# this together with the outer budget. 120s inside the 180s deadline keeps headroom for a
+# second attempt; a genuinely dead transfer is cut and retried.
+CURL_MAX_TIME="${CURL_MAX_TIME:-$(retry_scaled_deadline 120)}"
+
 case "$(uname -m)" in
   x86_64|amd64) ARCH=amd64 ;;
   aarch64|arm64) ARCH=arm64 ;;
@@ -34,13 +44,12 @@ esac
 # sudo only when not already root, so this works both as root and as a normal user.
 SUDO=""; [ "$(id -u)" -eq 0 ] || SUDO="sudo"
 
-fetch() {   # fetch URL -> file, retrying transient failures
-  local url="$1" out="$2" i
-  for i in $(seq 1 5); do
-    curl -fsSL -o "$out" "$url" && return 0
-    warn "download failed ($i/5): $url"; sleep 3
-  done
-  return 1
+fetch() {   # fetch URL -> file, retrying transient failures (deadline-budgeted, ticket 28)
+  # Inner guards make a single attempt bounded (a curl with no --max-time can hang forever,
+  # and then no outer budget ever fires); curl's own --retry rides out mid-transfer blips.
+  local url="$1" out="$2"
+  retry 180 "download $url" \
+    curl -fsSL --connect-timeout 10 --max-time "$CURL_MAX_TIME" --retry 3 -o "$out" "$url"
 }
 
 # -- 0. Submodule branches (match macOS prepare.sh: switch each submodule to the K3S branch) -
@@ -161,8 +170,14 @@ log "postgresql-client"
 if command -v psql >/dev/null 2>&1; then
   info "already installed ($(psql --version))"
 else
-  $SUDO apt-get update -qq || die "apt update failed (allow security.ubuntu.com, archive.ubuntu.com)"
-  $SUDO apt-get install -y -qq postgresql-client || die "postgresql-client install failed"
+  # Acquire::Retries rides out per-fetch mirror blips inside one apt run; the outer retry
+  # covers a transient index/lock failure of the run itself (ticket 28).
+  retry 120 "apt update" \
+    $SUDO apt-get update -qq -o Acquire::Retries=3 \
+    || die "apt update failed (allow security.ubuntu.com, archive.ubuntu.com)"
+  retry 120 "apt install postgresql-client" \
+    $SUDO apt-get install -y -qq -o Acquire::Retries=3 postgresql-client \
+    || die "postgresql-client install failed"
 fi
 
 # -- 6. aws CLI (OPTIONAL: only the consumer step needs it; up.sh skips consumer without) ---

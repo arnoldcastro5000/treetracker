@@ -251,6 +251,10 @@ provision_object_storage() {   # $1 adapter index
   info "object storage provisioned ($OBJECT_STORAGE_REGION)"
 }
 
+# One build attempt, output to the log file (truncated per attempt, so on final failure
+# the log holds the attempt that mattered). A named function because retry takes argv.
+_docker_build_logged() { local lf="$1"; shift; docker build "$@" >"$lf" 2>&1; }
+
 build_images() {   # $1 adapter index; appends rebuilt tags to REBUILT_IMAGES
   local i="$1" f="${A_DIR[$1]}/standalone.yaml" pull name ctx dockerfile extras tag logf
   # Every field is emitted with a leading "-" sentinel (stripped here): tab is IFS whitespace,
@@ -276,7 +280,15 @@ build_images() {   # $1 adapter index; appends rebuilt tags to REBUILT_IMAGES
       done
     fi
     logf="/tmp/up-${name}-build.log"
-    docker build "${args[@]}" "$(abs_path "$ctx")" >"$logf" 2>&1 || die "${A_NAME[$i]}: $tag build failed (see $logf)"
+    # Retried (ticket 28): an image build flakes on registry/npm transients inside the
+    # Dockerfile (seen live: bulk-pack-processor, run 32785419403). ~3 attempts inside the
+    # budget - the layer cache warms across attempts, so a real Dockerfile break still
+    # surfaces fast. No attempt timeout: a slow-but-healthy cold build must never be killed.
+    # The probe fast-fails on a deterministic firewall block of either host a build needs.
+    RETRY_MAX_ATTEMPTS=3 \
+    RETRY_PROBE="net_check_die 'docker build $tag' registry-1.docker.io; net_check_die 'docker build $tag' registry.npmjs.org" \
+      retry 300 "build $tag" _docker_build_logged "$logf" "${args[@]}" "$(abs_path "$ctx")" \
+      || die "${A_NAME[$i]}: $tag build failed (see $logf)"
     load_image "$tag"
     REBUILT_IMAGES="$REBUILT_IMAGES $tag"
   done < <(yq -r '.images // [] | .[] | [
@@ -390,14 +402,19 @@ step_cluster() {
   fi
   # A freshly-created cluster's API server (and its OpenAPI aggregation, used by
   # `kubectl apply` client-side validation) lags a few seconds → "failed to download
-  # openapi … EOF". Gate on readiness before anything applies.
-  local i
-  for i in $(seq 1 60); do
+  # openapi … EOF". Gate on readiness before anything applies. Deadline-driven (ticket 28):
+  # a local warmup poll keeps its poll-until-ready shape (no backoff - the API is not a
+  # remote endpoint to be gentle with); weak volunteer hardware just needs a wider window,
+  # via the knob or RETRY_BUDGET_SCALE.
+  local i poll=2 tries
+  tries=$(( $(retry_scaled_deadline "$CLUSTER_READY_TIMEOUT") / poll ))
+  [ "$tries" -ge 1 ] || tries=1
+  for i in $(seq 1 "$tries"); do
     [ "$(k get --raw=/readyz 2>/dev/null)" = "ok" ] && k get --raw=/openapi/v2 >/dev/null 2>&1 \
       && k get nodes 2>/dev/null | grep -q ' Ready' && break
-    sleep 2
+    sleep "$poll"
   done
-  k get nodes 2>/dev/null | grep -q ' Ready' || die "cluster API/node never became ready"
+  k get nodes 2>/dev/null | grep -q ' Ready' || die "cluster API/node never became ready (waited $((tries * poll))s; raise CLUSTER_READY_TIMEOUT or RETRY_BUDGET_SCALE on slow hardware)"
 }
 
 # Alpine/musl pods inherit a `search <host>.docker.internal` suffix. When the host DNS answers
