@@ -231,7 +231,11 @@ jobs:
           # window = the 2GB pressure signature; the same churn measured on API 32/33/34).
           # 4096M is the MEASURED sweet spot (2GB ~33% a11y on API 34, 4GB ~64%, 6GB WORSE -
           # host over-allocation feeds back as jank). Written into the AVD config pre-boot.
-          ram-size: 4096M
+          # EXPERIMENT (probe/route2-e2e-ram5g only): testing 5120M vs the 4096M gate to
+          # check whether the residual boot flake is guest-memory or host-CPU bound. The
+          # resource report captures guest MemAvailable at failure to settle it. Revert to
+          # 4096M if this is not clearly better; the gate stays at 4096M.
+          ram-size: 5120M
           disable-animations: true
           working-directory: apps/e2e
           emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back emulated -camera-front emulated
