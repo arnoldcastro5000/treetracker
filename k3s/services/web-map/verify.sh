@@ -11,9 +11,9 @@ fails=0
 check() {   # check <name> <want-substring-of-content-type|-> <url> [attempts]
   local name="$1" want="$2" url="$3" attempts="${4:-30}" code ctype
   for i in $(seq 1 "$attempts"); do
-    code=$(curl -s -o /tmp/webmap-verify-body -w '%{http_code}' --max-time 15 "$url" || echo 000)
+    code=$(curl -sL -o /tmp/webmap-verify-body -w '%{http_code}' --max-time 15 "$url" || echo 000)
     if [ "$code" = 200 ]; then
-      ctype=$(curl -s -o /dev/null -w '%{content_type}' --max-time 15 "$url" || true)
+      ctype=$(curl -sL -o /dev/null -w '%{content_type}' --max-time 15 "$url" || true)
       if [ "$want" = "-" ] || printf '%s' "$ctype" | grep -qi "$want"; then
         log "verify OK: $name"
         return 0

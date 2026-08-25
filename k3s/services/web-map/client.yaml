@@ -37,8 +37,9 @@ metadata:
   name: web-map-client
   namespace: webmap
 spec:
-  prefix: /map/
+  # /map (no trailing slash): Next serves basePath /map and 308-redirects /map/ -> /map, so the
+  # bare form must route too. Keep the prefix on the path: no rewrite.
+  prefix: /map
   service: web-map-client
-  # Keep the /map prefix: Next serves under basePath /map, so no rewrite.
   rewrite: ""
   timeout_ms: 30000
