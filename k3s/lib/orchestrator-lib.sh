@@ -222,10 +222,22 @@ load_image() {
     # smoke catches it). So import, then VERIFY the image really landed in the node, retrying while
     # the host Docker copy still exists; only drop that copy once the node confirms the image.
     local i
-    for i in $(seq 1 5); do
+    for i in $(seq 1 3); do
       k3d image import "$img" -c "$CLUSTER" >/dev/null 2>&1 || true
       image_in_cluster "$img" && break
-      [ "$i" = 5 ] && die "k3d image import $img: image absent from the node after 5 attempts"
+      if [ "$i" = 3 ]; then
+        # k3d's tools-node import can fail against a Docker daemon on the containerd
+        # image store (driver-type io.containerd.snapshotter.v1): ctr inside the node
+        # dies with "content digest ... not found" while k3d still exits 0. A direct
+        # save|ctr pipe into the node's k8s.io namespace works there, so fall back to
+        # it before dying (seen live 2026-08-25; GH runners use the classic store and
+        # never hit this).
+        warn "k3d image import $img: not visible after $i attempts, falling back to docker save | ctr import"
+        docker save "$img" | docker exec -i "$NODE" ctr -n k8s.io images import - >/dev/null 2>&1 || true
+        image_in_cluster "$img" \
+          || die "image import $img: absent from the node after k3d import x$i and the direct ctr fallback"
+        break
+      fi
       info "import $img: not visible in the node yet, retry $i"; sleep 3
     done
     # k3d import COPIES the image into the node's containerd, so the host Docker copy is now
