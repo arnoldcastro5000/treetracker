@@ -38,7 +38,9 @@ abs_path() { case "$1" in /*) printf '%s' "$1" ;; *) printf '%s' "$TT_ROOT/$1" ;
 GATEWAY_SERVICE_TYPE="${GATEWAY_SERVICE_TYPE:-NodePort}"
 GATEWAY_NODEPORT_HTTP="${GATEWAY_NODEPORT_HTTP:-30080}"
 GATEWAY_NODEPORT_HTTPS="${GATEWAY_NODEPORT_HTTPS:-30443}"
-GATEWAY_URL="${GATEWAY_URL:-http://localhost:8088}"
+GATEWAY_HTTP_PORT="${GATEWAY_HTTP_PORT:-8088}"     # host ports the k3d loadbalancer publishes;
+GATEWAY_HTTPS_PORT="${GATEWAY_HTTPS_PORT:-8443}"   # set BEFORE the cluster is first created
+GATEWAY_URL="${GATEWAY_URL:-http://localhost:${GATEWAY_HTTP_PORT}}"
 EMISSARY_VER="${EMISSARY_VER:-3.12.2}"
 EMISSARY_CHART_VER="${EMISSARY_CHART_VER:-8.12.2}"
 

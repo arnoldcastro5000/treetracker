@@ -21,8 +21,11 @@ export PATH="/opt/homebrew/bin:$PATH"
 export SUBMODULE_BRANCH
 export ROOT
 
-# Switch each submodule to the branch used by the K3S setup.
-log "submodule branches"
+# Submodules: PINNED by default - volunteers get exactly the gitlink commits this superproject
+# commit was validated with. FOLLOW_SUBMODULE_BRANCHES=1 is the developer opt-in that switches
+# every submodule to the moving $SUBMODULE_BRANCH branch tip instead.
+if [ "${FOLLOW_SUBMODULE_BRANCHES:-0}" = 1 ]; then
+log "submodule branches (developer mode: tracking $SUBMODULE_BRANCH)"
 git -C "$ROOT" submodule sync --recursive
 git -C "$ROOT" submodule init
 git -C "$ROOT" submodule status --recursive | awk '/^-/{print $2}' | while read -r submodule_path; do
@@ -76,11 +79,22 @@ if [ -s "$missing_file" ]; then
   missing_submodule_branches="$(cat "$missing_file")"
   die "missing origin/$SUBMODULE_BRANCH branch in submodule(s): ${missing_submodule_branches//$'\n'/, }"
 fi
+else
+log "submodules (pinned to the validated commits)"
+git -C "$ROOT" submodule sync --recursive
+git -C "$ROOT" submodule init
+git -C "$ROOT" submodule status --recursive | awk '/^-/{print $2}' | while read -r submodule_path; do
+  git -C "$ROOT" submodule update --init --recursive -- "$submodule_path"
+done
+drift="$(git -C "$ROOT" submodule status --recursive | awk '/^\+/{print $2}')"
+[ -z "$drift" ] || warn "submodule(s) ahead of the pinned commit (left untouched): ${drift//$'\n'/, }"
+info "FOLLOW_SUBMODULE_BRANCHES=1 switches submodules to the $SUBMODULE_BRANCH branch (developers only)"
+fi
 
 # ── 1. Host tools (Homebrew) ────────────────────────────────────────────────
 log "host tools"
 command -v brew >/dev/null 2>&1 || die "Homebrew not installed — https://brew.sh"
-for f in k3d helm awscli libpq yq; do
+for f in k3d helm awscli libpq yq jq; do
   brew list "$f" >/dev/null 2>&1 || { info "brew install $f"; brew install "$f"; }
 done
 # libpq is keg-only → link psql/pg_dump onto PATH
@@ -100,14 +114,21 @@ if ! docker info >/dev/null 2>&1; then
   docker info >/dev/null 2>&1 || die "Docker daemon did not start"
 fi
 
-# ── 3. ClashX must allow LAN (so Docker's VM can reach the host proxy) ────────
-log "proxy (ClashX)"
-if lsof -nP -iTCP:"$PROXY_PORT" -sTCP:LISTEN 2>/dev/null | grep -q "127.0.0.1:$PROXY_PORT"; then
-  warn "ClashX is bound to 127.0.0.1 only — enable 'Allow connections from LAN' in ClashX, then re-run."
+# ── 3. Local proxy (ClashX-style) — OPTIONAL, only relevant when one is running ──
+proxy_running=0
+if lsof -nP -iTCP:"$PROXY_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+  proxy_running=1
+  log "proxy detected on :$PROXY_PORT"
+  if lsof -nP -iTCP:"$PROXY_PORT" -sTCP:LISTEN 2>/dev/null | grep -q "127.0.0.1:$PROXY_PORT"; then
+    warn "the proxy is bound to 127.0.0.1 only — enable 'Allow connections from LAN', then re-run."
+  fi
 fi
 
 # ── 4. Point Docker's daemon proxy at the current LAN IP (fixes image pulls) ──
+# Only when a pull fails AND a local proxy is actually running. On a no-proxy machine a
+# failing pull is a plain network problem; rewriting Docker's proxy settings would make it worse.
 if ! docker pull hello-world >/dev/null 2>&1; then
+  [ "$proxy_running" = 1 ] || die "docker pull is failing and no local proxy listens on :$PROXY_PORT — fix the network (or start your proxy and re-run)"
   log "fixing Docker proxy (pull currently failing)"
   ip="$(ipconfig getifaddr "$(route -n get default 2>/dev/null | awk '/interface:/{print $2}')" 2>/dev/null)"
   [ -n "$ip" ] || die "no LAN IP found"

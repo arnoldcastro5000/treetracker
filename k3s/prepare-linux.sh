@@ -52,17 +52,26 @@ fetch() {   # fetch URL -> file, retrying transient failures (deadline-budgeted,
     curl -fsSL --connect-timeout 10 --max-time "$CURL_MAX_TIME" --retry 3 -o "$out" "$url"
 }
 
-# -- 0. Submodule branches (match macOS prepare.sh: switch each submodule to the K3S branch) -
-# Mirrors prepare.sh so Linux hosts pin the same submodule branch the stack is built against.
-# SKIP in CI: actions/checkout already pins every submodule to the superproject commit, so
-# forcing them onto the moving k3s branch is both unnecessary and wrong (it would swap the
-# code under test to branch tips). CI sets SKIP_SUBMODULE_BRANCHES=1.
-if [ "${SKIP_SUBMODULE_BRANCHES:-0}" = 1 ]; then
-  info "submodule branch switch skipped (SKIP_SUBMODULE_BRANCHES=1; submodules already pinned)"
+# -- 0. Submodules: PINNED by default (match macOS prepare.sh) -------------------------------
+# The default initializes every submodule at the gitlink commit this superproject commit was
+# validated with: the volunteer path. It is also correct in CI (actions/checkout pins the same
+# commits, so this is a no-op there; the old SKIP_SUBMODULE_BRANCHES=1 is no longer needed and
+# is ignored). FOLLOW_SUBMODULE_BRANCHES=1 is the developer opt-in that switches every
+# submodule to the moving $SUBMODULE_BRANCH branch tip instead.
+if [ "${FOLLOW_SUBMODULE_BRANCHES:-0}" != 1 ]; then
+  log "submodules (pinned to the validated commits)"
+  git -C "$ROOT" submodule sync --recursive
+  git -C "$ROOT" submodule init
+  git -C "$ROOT" submodule status --recursive | awk '/^-/{print $2}' | while read -r submodule_path; do
+    git -C "$ROOT" submodule update --init --recursive -- "$submodule_path"
+  done
+  drift="$(git -C "$ROOT" submodule status --recursive | awk '/^\+/{print $2}')"
+  [ -z "$drift" ] || warn "submodule(s) ahead of the pinned commit (left untouched): ${drift//$'\n'/, }"
+  info "FOLLOW_SUBMODULE_BRANCHES=1 switches submodules to the $SUBMODULE_BRANCH branch (developers only)"
 else
 export SUBMODULE_BRANCH
 export ROOT
-log "submodule branches"
+log "submodule branches (developer mode: tracking $SUBMODULE_BRANCH)"
 git -C "$ROOT" submodule sync --recursive
 git -C "$ROOT" submodule init
 git -C "$ROOT" submodule status --recursive | awk '/^-/{print $2}' | while read -r submodule_path; do
@@ -178,6 +187,19 @@ else
   retry 120 "apt install postgresql-client" \
     $SUDO apt-get install -y -qq -o Acquire::Retries=3 postgresql-client \
     || die "postgresql-client install failed"
+fi
+
+# -- 5b. jq (e2e-lib.sh and the report scripts parse JSON with it) ---------------------------
+log "jq"
+if command -v jq >/dev/null 2>&1; then
+  info "already installed ($(jq --version 2>/dev/null))"
+else
+  retry 120 "apt update" \
+    $SUDO apt-get update -qq -o Acquire::Retries=3 \
+    || die "apt update failed (allow security.ubuntu.com, archive.ubuntu.com)"
+  retry 120 "apt install jq" \
+    $SUDO apt-get install -y -qq -o Acquire::Retries=3 jq \
+    || die "jq install failed"
 fi
 
 # -- 6. aws CLI (OPTIONAL: only the consumer step needs it; up.sh skips consumer without) ---

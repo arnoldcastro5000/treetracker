@@ -374,10 +374,10 @@ step_cluster() {
     local lb_args
     if [ "$GATEWAY_SERVICE_TYPE" = NodePort ]; then
       lb_args=( --k3s-arg "--disable=servicelb@server:*"
-                -p "8088:${GATEWAY_NODEPORT_HTTP}@loadbalancer"
-                -p "8443:${GATEWAY_NODEPORT_HTTPS}@loadbalancer" )
+                -p "${GATEWAY_HTTP_PORT}:${GATEWAY_NODEPORT_HTTP}@loadbalancer"
+                -p "${GATEWAY_HTTPS_PORT}:${GATEWAY_NODEPORT_HTTPS}@loadbalancer" )
     else
-      lb_args=( -p "8088:80@loadbalancer" -p "8443:443@loadbalancer" )
+      lb_args=( -p "${GATEWAY_HTTP_PORT}:80@loadbalancer" -p "${GATEWAY_HTTPS_PORT}:443@loadbalancer" )
     fi
     k3d cluster create "$CLUSTER" \
       --k3s-arg "--disable=traefik@server:*" \
