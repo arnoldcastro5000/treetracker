@@ -32,5 +32,12 @@ RUN GOOGLE_URL='https://{s}.google.com/vt/lyrs=s,h&x={x}&y={y}&z={z}' \
   && sed -i "s|$GOOGLE_URL|$BASEMAP_URL|" "$CORE" \
   && grep -qF "$BASEMAP_URL" "$CORE"
 COPY --from=localdeploy env.local-k3s .env.production
+# next build prerenders /top via getStaticProps, which fetches the featured lists from the API at
+# BUILD time. Prod builds against the live prod API (absolute URLs); a hermetic :local build has
+# no API to call, and the page's error path returns undefined, which kills the export. Empty
+# props keep the build hermetic; /top is the leaderboard page, disabled in this env anyway.
+RUN f=src/pages/top.js \
+  && [ "$(grep -c "const props = await serverSideData(params);" $f)" = 1 ] \
+  && sed -i "s|const props = await serverSideData(params);|const props = await serverSideData(params).catch(() => ({}));|" $f
 RUN npm run build
 CMD ["npm", "run", "start"]
