@@ -38,6 +38,6 @@ COPY --from=localdeploy env.local-k3s .env.production
 # props keep the build hermetic; /top is the leaderboard page, disabled in this env anyway.
 RUN f=src/pages/top.js \
   && [ "$(grep -c "const props = await serverSideData(params);" $f)" = 1 ] \
-  && sed -i "s|const props = await serverSideData(params);|const props = await serverSideData(params).catch(() => ({}));|" $f
+  && sed -i "s|const props = await serverSideData(params);|const props = await serverSideData(params).catch(() => ({ trees: [], countries: [], planters: [], organizations: [], wallets: [] }));|" $f
 RUN npm run build
 CMD ["npm", "run", "start"]
