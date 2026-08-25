@@ -13,5 +13,8 @@ COPY . ./
 RUN sudo apt-get update && sudo apt-get -y install build-essential zlib1g-dev ca-certificates \
   || echo "apt unavailable (restricted network); relying on the base image toolchain"
 COPY --from=node14 /usr/local /usr/local
+# node-gyp normally downloads the node headers from nodejs.org (blocked here); the official node
+# image already ships them at /usr/local/include/node, so build against those in place.
+ENV npm_config_nodedir=/usr/local
 RUN make release_base
 CMD [ "npm", "start" ]
