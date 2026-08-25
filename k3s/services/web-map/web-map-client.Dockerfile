@@ -11,7 +11,10 @@ WORKDIR /app
 # leaflet-utfgrid is a git dependency.
 RUN apk add --no-cache git
 COPY package.json package-lock.json ./
-RUN npm ci --silent
+# --ignore-scripts: the repo's prepare script runs `husky install`, which dies without a usable
+# .git in the image (the submodule checkout ships a gitdir pointer file); no dependency here
+# needs install scripts (the git-sourced leaflet-utfgrid is consumed as-is).
+RUN npm ci --ignore-scripts --no-audit --no-fund
 COPY . .
 # Google-geometry guard (decision 06): wrap the unconditional Google Maps JS injection in an env
 # gate. Done as gated seds (the injected lines quote the upstream-committed API key, which must

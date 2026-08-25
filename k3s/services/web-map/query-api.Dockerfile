@@ -6,7 +6,9 @@
 FROM node:16-alpine
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci --silent
+# --ignore-scripts: the repo's prepare script is `husky install`, which dies without a usable
+# .git in the image; no dependency here needs install scripts.
+RUN npm ci --ignore-scripts --no-audit --no-fund
 COPY . .
 RUN npm run build
 ENV NODE_ENV=production
