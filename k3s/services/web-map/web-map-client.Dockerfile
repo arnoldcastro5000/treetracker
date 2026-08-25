@@ -1,0 +1,33 @@
+# :local image for treetracker-web-map-client. Next.js inlines NEXT_PUBLIC_* at BUILD time from
+# .env.production, so the client's committed .env.local-k3s (single-origin gateway paths) is
+# copied over it before `next build` (the repo's own Dockerfile-dev/-test use the same pattern).
+#
+# Basemap (web-map-standalone decision 01): the npm treetracker-web-map-core bundle hardcodes a
+# keyless Google satellite TileLayer. The sed below swaps it for a public OSM raster (default;
+# override via BASEMAP_URL). The grep gates make the build FAIL LOUDLY if the core bundle drifts
+# and the pattern no longer matches, instead of shipping the wrong basemap silently.
+FROM node:16-alpine
+WORKDIR /app
+# leaflet-utfgrid is a git dependency.
+RUN apk add --no-cache git
+COPY package.json package-lock.json ./
+RUN npm ci --silent
+COPY . .
+# Google-geometry guard (decision 06): wrap the unconditional Google Maps JS injection in an env
+# gate. Done as gated seds (the injected lines quote the upstream-committed API key, which must
+# not be copied into this repo, so no patch file). The uniqueness gates fail the build loudly if
+# App.js drifts.
+RUN f=src/components/App.js \
+  && [ "$(grep -c "const script =" $f)" = 1 ] \
+  && [ "$(grep -c "document.body.appendChild(script);" $f)" = 1 ] \
+  && sed -i "s|const script =|if (process.env.NEXT_PUBLIC_GOOGLE_GEOMETRY_DISABLED !== 'true') { const script =|" $f \
+  && sed -i "s|document.body.appendChild(script);|document.body.appendChild(script); }|" $f
+ARG BASEMAP_URL='https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'
+RUN GOOGLE_URL='https://{s}.google.com/vt/lyrs=s,h&x={x}&y={y}&z={z}' \
+  && CORE=node_modules/treetracker-web-map-core/dist/main.js \
+  && grep -qF "$GOOGLE_URL" "$CORE" \
+  && sed -i "s|$GOOGLE_URL|$BASEMAP_URL|" "$CORE" \
+  && grep -qF "$BASEMAP_URL" "$CORE"
+COPY --from=localdeploy env.local-k3s .env.production
+RUN npm run build
+CMD ["npm", "run", "start"]

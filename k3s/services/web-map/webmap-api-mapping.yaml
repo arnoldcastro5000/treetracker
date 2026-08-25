@@ -1,0 +1,12 @@
+# The client's `apiServerUrl` calls /webmap/. The legacy treetracker-web-map-api is NOT part of
+# the local env (standalone-env research 08): /webmap/ points at the local query-api instead.
+apiVersion: getambassador.io/v2
+kind: Mapping
+metadata:
+  name: webmap-compat
+  namespace: webmap
+spec:
+  prefix: /webmap/
+  service: treetracker-query-api
+  rewrite: /
+  timeout_ms: 0

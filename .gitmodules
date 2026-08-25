@@ -46,3 +46,5 @@
 [submodule "images-api"]
 	path = images-api
 	url = https://github.com/Greenstand/images-api.git
+[submodule "node-mapnik-1"]
+	path = node-mapnik-1

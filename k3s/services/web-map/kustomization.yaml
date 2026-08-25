@@ -1,0 +1,40 @@
+# Local (k3d) overlay for the web-map thin spine. The tile-server and query-api manifests are
+# VENDORED from each submodule's deployment/base (the documented pattern; see the services README
+# "Refreshing a vendored overlay"), skipping each base's SealedSecret and Namespace: the adapter
+# creates plain local secrets and the orchestrator ensures the namespace. Kustomize also cannot
+# reference single files outside this dir, which rules out file-by-file base reuse. The client
+# manifests are authored here (the repo base is host-routed for prod; local is path-prefixed).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: webmap
+resources:
+  - tile-server-deployment.yaml
+  - tile-server-service.yaml
+  - tile-server-mapping.yaml
+  - query-api-deployment.yaml
+  - query-api-service.yaml
+  - query-api-mapping.yaml
+  - client.yaml
+  - webmap-api-mapping.yaml
+images:
+  - name: greenstand/treetracker-map-tile-server
+    newName: tile-server
+    newTag: local
+  - name: greenstand/treetracker-query-api
+    newName: query-api
+    newTag: local
+replicas:
+  - name: treetracker-tile-server
+    count: 1
+  - name: treetracker-query-api
+    count: 1
+patches:
+  # The prod bases pin pods to DO node pools; no affinity locally.
+  - target: { kind: Deployment, name: treetracker-tile-server }
+    patch: |-
+      - op: remove
+        path: /spec/template/spec/affinity
+  - target: { kind: Deployment, name: treetracker-query-api }
+    patch: |-
+      - op: remove
+        path: /spec/template/spec/affinity
