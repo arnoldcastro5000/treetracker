@@ -324,6 +324,10 @@ jobs:
         run: |
           DIR=apps/e2e/test-artifacts/k8s
           mkdir -p "$DIR"
+          # up.sh writes each image build's output to /tmp/up-<name>-build.log; copy them into
+          # the artifact so a standup build failure is diagnosable after the fact (ticket 28 -
+          # the bulk-pack-processor flake's root line was unrecoverable without this).
+          cp /tmp/up-*-build.log "$DIR/" 2>/dev/null || true
           kubectl get pods -A -o wide                    > "$DIR/pods.txt" 2>&1 || true
           kubectl get events -A --sort-by=.lastTimestamp > "$DIR/events.txt" 2>&1 || true
           for ns in data object-storage bulk-pack-services field-data-api \
