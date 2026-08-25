@@ -55,6 +55,8 @@ fresh k3d cluster's kubeconfig until pinned to `127.0.0.1` (up.sh does this).
 k3d cluster create greenstand \
   --k3s-arg "--disable=traefik@server:*" \
   -p "8088:80@loadbalancer" -p "8443:443@loadbalancer" --agents 0
+# up.sh does this for you; the host ports come from GATEWAY_HTTP_PORT/GATEWAY_HTTPS_PORT
+# (defaults 8088/8443). Set them BEFORE the first up.sh if 8088/8443 are taken.
 # after a Docker/machine restart the cluster is stopped, not gone:
 k3d cluster start greenstand
 ```

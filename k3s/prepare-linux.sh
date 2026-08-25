@@ -52,80 +52,27 @@ fetch() {   # fetch URL -> file, retrying transient failures (deadline-budgeted,
     curl -fsSL --connect-timeout 10 --max-time "$CURL_MAX_TIME" --retry 3 -o "$out" "$url"
 }
 
-# -- 0. Submodules: PINNED by default (match macOS prepare.sh) -------------------------------
-# The default initializes every submodule at the gitlink commit this superproject commit was
-# validated with: the volunteer path. It is also correct in CI (actions/checkout pins the same
-# commits, so this is a no-op there; the old SKIP_SUBMODULE_BRANCHES=1 is no longer needed and
-# is ignored). FOLLOW_SUBMODULE_BRANCHES=1 is the developer opt-in that switches every
-# submodule to the moving $SUBMODULE_BRANCH branch tip instead.
-if [ "${FOLLOW_SUBMODULE_BRANCHES:-0}" != 1 ]; then
-  log "submodules (pinned to the validated commits)"
-  git -C "$ROOT" submodule sync --recursive
-  git -C "$ROOT" submodule init
-  git -C "$ROOT" submodule status --recursive | awk '/^-/{print $2}' | while read -r submodule_path; do
-    git -C "$ROOT" submodule update --init --recursive -- "$submodule_path"
-  done
-  drift="$(git -C "$ROOT" submodule status --recursive | awk '/^\+/{print $2}')"
-  [ -z "$drift" ] || warn "submodule(s) ahead of the pinned commit (left untouched): ${drift//$'\n'/, }"
-  info "FOLLOW_SUBMODULE_BRANCHES=1 switches submodules to the $SUBMODULE_BRANCH branch (developers only)"
-else
-export SUBMODULE_BRANCH
-export ROOT
-log "submodule branches (developer mode: tracking $SUBMODULE_BRANCH)"
-git -C "$ROOT" submodule sync --recursive
-git -C "$ROOT" submodule init
-git -C "$ROOT" submodule status --recursive | awk '/^-/{print $2}' | while read -r submodule_path; do
-  git -C "$ROOT" submodule update --init --recursive -- "$submodule_path"
-done
-missing_file="$ROOT/.missing-submodule-branches"
-dirty_file="$ROOT/.dirty-submodule-branches"
-rm -f "$missing_file" "$dirty_file"
-trap 'rm -f "$missing_file" "$dirty_file"' EXIT
-export missing_file dirty_file
-git -C "$ROOT" submodule foreach --recursive '
-  echo "  $name -> $SUBMODULE_BRANCH"
-  git ls-remote --exit-code --heads origin "$SUBMODULE_BRANCH" >/dev/null
-  ls_remote_status=$?
-  case "$ls_remote_status" in
-    0) ;;
-    2)
-      echo "$name" >> "$missing_file"
-      echo "  missing origin/$SUBMODULE_BRANCH"
-      exit 0
-      ;;
-    *)
-      echo "  failed to check origin/$SUBMODULE_BRANCH"
-      exit "$ls_remote_status"
-      ;;
-  esac
+APT_UPDATED=0
+apt_ensure() {   # apt_ensure <pkg> - one apt update per run, then install (retry-budgeted)
+  # Acquire::Retries rides out per-fetch mirror blips inside one apt run; the outer retry
+  # covers a transient index/lock failure of the run itself (ticket 28).
+  local pkg="$1"
+  if [ "$APT_UPDATED" = 0 ]; then
+    retry 120 "apt update" \
+      $SUDO apt-get update -qq -o Acquire::Retries=3 \
+      || die "apt update failed (allow security.ubuntu.com, archive.ubuntu.com)"
+    APT_UPDATED=1
+  fi
+  retry 120 "apt install $pkg" \
+    $SUDO apt-get install -y -qq -o Acquire::Retries=3 "$pkg" \
+    || die "$pkg install failed"
+}
 
-  git fetch origin "$SUBMODULE_BRANCH"
-  checkout_log="$(mktemp)"
-  if git show-ref --verify --quiet "refs/heads/$SUBMODULE_BRANCH"; then
-    git checkout -q "$SUBMODULE_BRANCH" >"$checkout_log" 2>&1
-    checkout_status=$?
-  else
-    git checkout -q -b "$SUBMODULE_BRANCH" --track "origin/$SUBMODULE_BRANCH" >"$checkout_log" 2>&1
-    checkout_status=$?
-  fi
-  if [ "$checkout_status" -ne 0 ]; then
-    echo "$name" >> "$dirty_file"
-    echo "  could not switch to $SUBMODULE_BRANCH; clean or stash local changes"
-    rm -f "$checkout_log"
-    exit 0
-  fi
-  rm -f "$checkout_log"
-  git pull --ff-only --quiet origin "$SUBMODULE_BRANCH"
-'
-if [ -s "$dirty_file" ]; then
-  dirty_submodule_branches="$(cat "$dirty_file")"
-  die "could not switch submodule(s) to $SUBMODULE_BRANCH: ${dirty_submodule_branches//$'\n'/, }"
-fi
-if [ -s "$missing_file" ]; then
-  missing_submodule_branches="$(cat "$missing_file")"
-  die "missing origin/$SUBMODULE_BRANCH branch in submodule(s): ${missing_submodule_branches//$'\n'/, }"
-fi
-fi
+# -- 0. Submodules: pinned by default (shared logic; see k3s/lib/submodule-lib.sh) ----------
+# FOLLOW_SUBMODULE_BRANCHES=1 is the developer opt-in that tracks the k3s branch tips. The
+# old SKIP_SUBMODULE_BRANCHES=1 is no longer needed (the pinned default is a no-op in CI).
+. "$ROOT/k3s/lib/submodule-lib.sh"
+setup_submodules
 
 # -- 1. Docker (must already be present; this script does not install the engine) ----------
 log "docker"
@@ -179,14 +126,7 @@ log "postgresql-client"
 if command -v psql >/dev/null 2>&1; then
   info "already installed ($(psql --version))"
 else
-  # Acquire::Retries rides out per-fetch mirror blips inside one apt run; the outer retry
-  # covers a transient index/lock failure of the run itself (ticket 28).
-  retry 120 "apt update" \
-    $SUDO apt-get update -qq -o Acquire::Retries=3 \
-    || die "apt update failed (allow security.ubuntu.com, archive.ubuntu.com)"
-  retry 120 "apt install postgresql-client" \
-    $SUDO apt-get install -y -qq -o Acquire::Retries=3 postgresql-client \
-    || die "postgresql-client install failed"
+  apt_ensure postgresql-client
 fi
 
 # -- 5b. jq (e2e-lib.sh and the report scripts parse JSON with it) ---------------------------
@@ -194,12 +134,7 @@ log "jq"
 if command -v jq >/dev/null 2>&1; then
   info "already installed ($(jq --version 2>/dev/null))"
 else
-  retry 120 "apt update" \
-    $SUDO apt-get update -qq -o Acquire::Retries=3 \
-    || die "apt update failed (allow security.ubuntu.com, archive.ubuntu.com)"
-  retry 120 "apt install jq" \
-    $SUDO apt-get install -y -qq -o Acquire::Retries=3 jq \
-    || die "jq install failed"
+  apt_ensure jq
 fi
 
 # -- 6. aws CLI (OPTIONAL: only the consumer step needs it; up.sh skips consumer without) ---

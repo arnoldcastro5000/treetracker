@@ -12,7 +12,7 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/lib/e2e-lib.sh"   # k/ok/bad/psq/uuid/num + pack_json (shared with route2-two-file-test.sh)
 
-GW="${GATEWAY_URL:-http://localhost:8088}"
+GW="${GATEWAY_URL:-http://localhost:${GATEWAY_HTTP_PORT:-8088}}"
 ADMIN_USER="${ADMIN_USER:-test}"
 ADMIN_PASSWORD="${ADMIN_PASSWORD:-ieVyaGqyMX}"
 

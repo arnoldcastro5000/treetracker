@@ -10,7 +10,7 @@
 set -euo pipefail
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")/../../lib" && pwd)/orchestrator-lib.sh"
 
-GW="${GATEWAY_URL:-http://localhost:8088}"
+GW="${GATEWAY_URL:-http://localhost:${GATEWAY_HTTP_PORT:-8088}}"
 jn() { node -e 'const d=JSON.parse(require("fs").readFileSync(0,"utf8")||"null");process.stdout.write(String(('"$1"')??""))' 2>/dev/null; }
 
 log "wallet-app verify: Keycloak-bearer + api-key GET /wallet/v2/wallets"

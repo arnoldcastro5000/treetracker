@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# up hook: Emissary-ingress (OSS Ambassador) - the shared API gateway on localhost:8088.
+# up hook: Emissary-ingress (OSS Ambassador) - the shared API gateway on localhost:${GATEWAY_HTTP_PORT} (default 8088).
 # Bespoke (CRDs + helm + Service-type patch), so it lives in a hook instead of a plain overlay.
 # Subsystem overlays ship getambassador.io/v2 Mappings (they need these CRDs first); 3.x serves
 # v2 via its conversion webhook.
@@ -7,7 +7,7 @@ set -euo pipefail
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$(cd "$HOOK_DIR/../../../lib" && pwd)/orchestrator-lib.sh"
 
-log "emissary-ingress (API gateway → localhost:8088)"
+log "emissary-ingress (API gateway → localhost:${GATEWAY_HTTP_PORT})"
 k apply -f "https://app.getambassador.io/yaml/emissary/${EMISSARY_VER}/emissary-crds.yaml" >/dev/null 2>&1 \
   || { net_check_die "emissary CRD download" app.getambassador.io; die "emissary CRD apply failed"; }
 k wait --timeout=150s --for=condition=available deployment emissary-apiext -n emissary-system >/dev/null 2>&1 \

@@ -1,10 +1,10 @@
 # Greenstand Treetracker monorepo
 
 This repository is the umbrella for the Treetracker platform. It contains every application as a
-git submodule and a stand-alone Kubernetes environment (`k3s/`) that runs the platform on your own
-machine: the capture pipeline (Android app uploads -> processing -> admin verification), with the
-wallet app and more subsystems as opt-ins. No secrets and no access to Greenstand servers are
-required.
+git submodule. The `k3s/` directory holds a stand-alone Kubernetes environment that runs the
+platform on your own machine. The default standup is the capture pipeline (Android app uploads ->
+processing -> admin verification). The wallet app and more subsystems are opt-ins. You need no
+secrets and no access to Greenstand servers.
 
 ## Quickstart
 
@@ -15,9 +15,9 @@ cd treetracker
 ./k3s/up.sh
 ```
 
-Success looks like this: `up.sh` ends with every verify check green. The environment then serves
-the admin panel and the APIs at `http://localhost:8088`. Re-check any time with `./k3s/up.sh
-verify`. Tear down with `./k3s/down.sh`.
+Success is: `up.sh` ends with every verify check green. The environment then serves the admin
+panel and the APIs at `http://localhost:8088`. Re-check any time with `./k3s/up.sh verify`. Tear
+down with `./k3s/down.sh`.
 
 Useful variants:
 
