@@ -10,7 +10,9 @@ COPY package.json package-lock.json ./
 # resolve); rewrite them to the canonical registry, in-image only. --ignore-scripts: the repo's
 # prepare script is `husky install`, which dies without a usable .git in the image; no dependency
 # here needs install scripts.
-RUN sed -i 's|https://registry.npmmirror.com|https://registry.npmjs.org|g' package-lock.json \
+RUN sed -i -e 's|https://registry.npmmirror.com/cors/download/|https://registry.npmjs.org/cors/-/|g' \
+           -e 's|https://registry.npmmirror.com|https://registry.npmjs.org|g' package-lock.json \
+  && ! grep -q 'registry.npmmirror.com' package-lock.json \
   && npm ci --ignore-scripts --no-audit --no-fund
 COPY . .
 RUN npm run build
