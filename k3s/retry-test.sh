@@ -82,17 +82,34 @@ RC=$?
 [ "$RC" != 0 ] && ok "terminal failure propagates" || bad "rc 0 after terminal probe"
 [ "$(cat "$TMP/c8")" = 1 ] && ok "no attempt after terminal probe" || bad "$(cat "$TMP/c8") attempts (want 1)"
 
-echo "== 9. RETRY_ATTEMPT_TIMEOUT kills a hanging attempt"
-if command -v timeout >/dev/null 2>&1; then
-  START=$SECONDS
-  RETRY_BASE=0 RETRY_MAX_ATTEMPTS=2 RETRY_ATTEMPT_TIMEOUT=1 \
-    retry 600 "hang" sleep 30 2>/dev/null
-  RC=$?; ELAPSED=$((SECONDS - START))
-  [ "$RC" != 0 ] && ok "hanging command fails (rc $RC)" || bad "rc 0 on hang"
-  [ "$ELAPSED" -le 6 ] && ok "killed fast (${ELAPSED}s for 2 attempts)" || bad "took ${ELAPSED}s"
-else
-  ok "skipped (no timeout binary on this host)"
-fi
+echo "== 9. RETRY_ATTEMPT_TIMEOUT kills a hanging attempt (external binary)"
+START=$SECONDS
+RETRY_BASE=0 RETRY_MAX_ATTEMPTS=2 RETRY_ATTEMPT_TIMEOUT=1 \
+  retry 600 "hang" sleep 30 2>/dev/null
+RC=$?; ELAPSED=$((SECONDS - START))
+[ "$RC" != 0 ] && ok "hanging command fails (rc $RC)" || bad "rc 0 on hang"
+[ "$ELAPSED" -le 6 ] && ok "killed fast (${ELAPSED}s for 2 attempts)" || bad "took ${ELAPSED}s"
+
+echo "== 9b. RETRY_ATTEMPT_TIMEOUT works on a shell FUNCTION (cycle-1 regression: external"
+echo "==     timeout cannot exec a function -> rc 127 storm)"
+fn_ok() { true; }
+RETRY_BASE=0 RETRY_ATTEMPT_TIMEOUT=5 retry 60 "fn" fn_ok
+[ $? = 0 ] && ok "function runs under attempt timeout" || bad "function failed under attempt timeout"
+fn_hang() { sleep 30; }
+START=$SECONDS
+RETRY_BASE=0 RETRY_MAX_ATTEMPTS=2 RETRY_ATTEMPT_TIMEOUT=1 \
+  retry 600 "fn-hang" fn_hang 2>/dev/null
+RC=$?; ELAPSED=$((SECONDS - START))
+[ "$RC" != 0 ] && ok "hanging function fails (rc $RC)" || bad "rc 0 on hanging function"
+[ "$ELAPSED" -le 6 ] && ok "function killed fast (${ELAPSED}s)" || bad "took ${ELAPSED}s"
+
+echo "== 9c. rc 127/126 (command not found / not executable) is terminal, never retried"
+: > "$TMP/c9c"
+fn_127() { fail_until "$TMP/c9c" 999999 >/dev/null; return 127; }
+RETRY_BASE=0 RETRY_MAX_ATTEMPTS=5 retry 600 "notfound" fn_127 2>/dev/null
+RC=$?
+[ "$RC" = 127 ] && ok "rc 127 propagated" || bad "rc $RC (want 127)"
+[ "$(cat "$TMP/c9c")" = 1 ] && ok "no retry on rc 127" || bad "$(cat "$TMP/c9c") attempts on rc 127 (want 1)"
 
 echo "== 10. RETRY_BUDGET_SCALE=0 collapses the deadline to a single attempt"
 : > "$TMP/c10"

@@ -18,9 +18,11 @@
 #                        knob a volunteer on a slow link turns up (e.g. 3) and CI turns
 #                        down (e.g. 0.6). Decimals accepted.
 #   RETRY_MAX_ATTEMPTS   hard attempt cap inside the deadline (default 0 = unlimited).
-#   RETRY_ATTEMPT_TIMEOUT  per-attempt kill via `timeout` for commands that can hang
-#                        forever, in seconds, scaled (default 0 = none; skipped when no
-#                        `timeout` binary exists, e.g. stock macOS).
+#   RETRY_ATTEMPT_TIMEOUT  per-attempt kill for commands that can hang forever, in
+#                        seconds, scaled (default 0 = none). Pure-bash watchdog, NOT the
+#                        external `timeout` binary: the command may be a shell FUNCTION
+#                        (which an external binary cannot exec - it 127s), and stock
+#                        macOS has no `timeout` at all.
 #   RETRY_PROBE          eval'd ONCE after the first failed attempt: a deterministic-
 #                        failure classifier (e.g. net_check_die, which exits with the
 #                        real cause on a firewall block). If it RETURNS non-zero the
@@ -44,6 +46,18 @@ _retry_scaled() { awk -v d="$1" -v s="$2" 'BEGIN{printf "%d", d*s}'; }
 # wrapped command.
 retry_scaled_deadline() { _retry_scaled "$1" "${RETRY_BUDGET_SCALE:-1}"; }
 
+# Run <cmd...> with a <seconds> kill watchdog. Bash-level (fork + kill), so it times out
+# shell functions as well as binaries and needs no `timeout` on the host. The child's
+# children are not chased: the clients used here (docker, curl) are single processes.
+_retry_run_timed() {
+  local t="$1" pid wd rc; shift
+  "$@" & pid=$!
+  { sleep "$t" && kill "$pid" 2>/dev/null; } & wd=$!
+  wait "$pid" 2>/dev/null; rc=$?
+  kill "$wd" 2>/dev/null; wait "$wd" 2>/dev/null
+  return "$rc"
+}
+
 # Backoff window for <attempt> given <base> <cap>: min(cap, base*2^(attempt-1)). base 0
 # (test mode) is always 0; past attempt 16 the shift would overflow, and base*2^15 >= cap
 # for any real base/cap, so clamp straight to cap there.
@@ -66,12 +80,18 @@ retry() {
   atmo=$(_retry_scaled "${RETRY_ATTEMPT_TIMEOUT:-0}" "$scale")
   while :; do
     attempt=$((attempt + 1))
-    if [ "$atmo" -gt 0 ] && command -v timeout >/dev/null 2>&1; then
-      timeout "$atmo" "$@"; rc=$?
+    if [ "$atmo" -gt 0 ]; then
+      _retry_run_timed "$atmo" "$@"; rc=$?
     else
       "$@"; rc=$?
     fi
     [ "$rc" -eq 0 ] && return 0
+    # 127/126 = command not found / not executable: deterministic, retrying cannot help
+    # (cycle-1 regression: a 127 storm burned the whole 300s budget).
+    if [ "$rc" -eq 127 ] || [ "$rc" -eq 126 ]; then
+      warn "$label: rc $rc (command not found/executable) is terminal, not retrying"
+      return "$rc"
+    fi
     if [ "$attempt" -eq 1 ] && [ -n "${RETRY_PROBE:-}" ]; then
       # The probe either exits the script itself with the real cause (net_check_die on a
       # block), returns non-zero (terminal: do not retry), or returns 0 (transient: go on).
