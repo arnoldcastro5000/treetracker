@@ -6,10 +6,10 @@
 # keyless Google satellite TileLayer. The sed below swaps it for a public OSM raster (default;
 # override via BASEMAP_URL). The grep gates make the build FAIL LOUDLY if the core bundle drifts
 # and the pattern no longer matches, instead of shipping the wrong basemap silently.
-FROM node:16-alpine
+# Full (Debian) node image: git is preinstalled (leaflet-utfgrid is a git dependency) and the
+# Alpine package CDN is DNS-blocked on restricted networks, so apk cannot be used.
+FROM node:16
 WORKDIR /app
-# leaflet-utfgrid is a git dependency.
-RUN apk add --no-cache git
 COPY package.json package-lock.json ./
 # --ignore-scripts: the repo's prepare script runs `husky install`, which dies without a usable
 # .git in the image (the submodule checkout ships a gitdir pointer file); no dependency here
