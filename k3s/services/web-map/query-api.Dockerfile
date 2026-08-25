@@ -6,9 +6,12 @@
 FROM node:16-alpine
 WORKDIR /app
 COPY package.json package-lock.json ./
-# --ignore-scripts: the repo's prepare script is `husky install`, which dies without a usable
-# .git in the image; no dependency here needs install scripts.
-RUN npm ci --ignore-scripts --no-audit --no-fund
+# The upstream lockfile pins 4 packages to registry.npmmirror.com (a mirror many networks cannot
+# resolve); rewrite them to the canonical registry, in-image only. --ignore-scripts: the repo's
+# prepare script is `husky install`, which dies without a usable .git in the image; no dependency
+# here needs install scripts.
+RUN sed -i 's|https://registry.npmmirror.com|https://registry.npmjs.org|g' package-lock.json \
+  && npm ci --ignore-scripts --no-audit --no-fund
 COPY . .
 RUN npm run build
 ENV NODE_ENV=production
