@@ -350,11 +350,13 @@ jobs:
             echo '```'
           } | tee "$DIR/report.txt" >> "$GITHUB_STEP_SUMMARY"
 
-      # Cluster diagnostics for a failed run (pods + recent logs of the pipeline).
-      - name: Collect k8s diagnostics
-        if: failure()
+      # Cluster diagnostics for every run (pods + recent logs of the pipeline), captured
+      # while the cluster is still up. Always-on so a green run keeps the same evidence a
+      # red one does; the pod-log fan-out is best-effort and never fails the run.
+      - name: Collect k3s diagnostics
+        if: always()
         run: |
-          DIR=apps/e2e/test-artifacts/k8s
+          DIR=apps/e2e/test-artifacts/k3s
           mkdir -p "$DIR"
           # up.sh writes each image build's output to /tmp/up-<name>-build.log; copy them into
           # the artifact so a standup build failure is diagnosable after the fact (ticket 28 -
