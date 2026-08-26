@@ -1,8 +1,8 @@
 # The stand-alone k3s environment
 
 This directory runs the Treetracker platform on your own machine, inside one local
-[k3d](https://k3d.io) cluster named `k3d-greenstand`. You need no secrets and no access to
-Greenstand servers. The root [README](../README.md) has the quickstart, the requirements, and the
+[k3d](https://k3d.io) cluster named `greenstand` (kube context `k3d-greenstand`). You need no
+secrets and no access to Greenstand servers. The root [README](../README.md) has the quickstart, the requirements, and the
 network-host list. This file describes how the environment works.
 
 ## Subsystems
@@ -11,13 +11,13 @@ network-host list. This file describes how the environment works.
 [`services/README.md`](services/README.md) describes the adapter contract and how to add a
 subsystem.
 
-| Subsystem | Standup | Contents |
+| Subsystem | Command | Contents |
 |---|---|---|
 | capture (default) | `./k3s/up.sh` | The capture pipeline: treetracker-field-data, treetracker-api, images-api, the four bulk-pack services, admin-api, and the admin client. |
-| wallet-app (opt-in) | `./k3s/up.sh wallet-app` | The wallet web app, its NestJS backend, and Keycloak. |
+| wallet-app (opt-in) | `./k3s/up.sh wallet-app` | The wallet web app, the wallet API, the user backend, and Keycloak. |
 
-Tier services (PostgreSQL, RabbitMQ, LocalStack, the Emissary gateway, Keycloak) stand up
-automatically when a selected subsystem declares them as dependencies.
+PostgreSQL and the Emissary gateway are universal tier services: they always stand up. RabbitMQ,
+LocalStack, and Keycloak stand up when a selected subsystem declares them as dependencies.
 
 ## Commands
 
@@ -33,25 +33,25 @@ automatically when a selected subsystem declares them as dependencies.
 ./k3s/down.sh --images       # also remove the built and pulled images
 ```
 
-`up.sh` is idempotent and readiness-gated: a re-run repairs and continues, it does not duplicate.
-An image build is gated on presence in the cluster, so a re-run skips images that are already
-loaded and rebuilds only the missing ones. `--rebuild` forces the builds and rolls the affected
-deployments.
+`up.sh` is idempotent and readiness-gated: a re-run repairs and continues. It does not duplicate
+work. An image build is gated on presence in the cluster, so a re-run skips the images that are
+already loaded and rebuilds only the missing ones. `--rebuild` forces the builds and rolls the
+affected deployments.
 
 ## How verify decides green
 
-After every selected adapter is up, its declared verify hook runs as a hard gate. So "`up.sh`
-succeeded" means "the environment works". The capture verify hook is `smoke.sh`, a 17-check
-in-cluster smoke test that follows a capture from upload to the admin panel. Re-check any time
-with `./k3s/up.sh verify`. Skip the gate with `--no-verify` when you iterate.
+After every selected adapter is up, its declared verify hook runs as a hard gate. "`up.sh`
+succeeded" means "the environment works". The capture verify hook is `smoke.sh`, an in-cluster
+smoke test that follows a capture from upload to the admin panel. Re-check any time with
+`./k3s/up.sh verify`. Skip the gate with `--no-verify` when you iterate.
 
 ## The gateway and the endpoints
 
 The browser reaches everything through one origin: `http://localhost:8088` (the k3d load balancer
 to Emissary-ingress). Each service ships its own `getambassador.io` Mapping (`/api/admin/` to
 admin-api, `/images/` to images-api, `/field-data/`, `/treetracker/`), and the admin client maps
-`/`. One origin means no CORS and no per-service port-forward. `up.sh` prints
-`ADMIN_URL=http://localhost:8088` when it finishes.
+`/`. One origin means no CORS and no per-service port-forward. The capture standup prints
+`ADMIN_URL=http://localhost:8088`, and `up.sh` ends with the gateway URL.
 
 ## Environment knobs
 
@@ -72,9 +72,9 @@ hand.
 
 ## The AWS `local` environment for the Android app (optional)
 
-The standup itself needs no AWS account: LocalStack provides S3 and SQS in the cluster, and the
-capture adapter declares its secrets as dummy literals that `up.sh` creates imperatively (never
-real credentials, never in git).
+The standup itself needs no AWS account: LocalStack provides S3 and SQS as a host-side Docker
+container on port 4566 (not a cluster workload), and the capture adapter declares its secrets as
+dummy literals that `up.sh` creates imperatively (never real credentials, never in git).
 
 The optional Android-app leg uses real AWS, so the app's Cognito-based S3 upload works with full
 fidelity: account `053061259712`, region `eu-central-1`, CLI profile `greenstand` (credentials in
@@ -90,9 +90,16 @@ fidelity: account `053061259712`, region `eu-central-1`, CLI profile `greenstand
 | IAM unauth role | `treetracker-local-cognito-unauth` (inline `s3:PutObject` on both buckets) |
 
 The app does `PutObject` with a public-read ACL on every object. The setup needs two fixes, or
-the app's "ready to upload" counter never drains: the buckets must allow ACLs
-(`ObjectOwnership=BucketOwnerPreferred` plus a permissive public-access block), and the Cognito
-unauth role needs `s3:PutObjectAcl` and `s3:PutObjectVersionAcl` in its inline policy.
+the app's "ready to upload" counter never drains: the buckets must allow ACLs, and the Cognito
+unauth role needs `s3:PutObjectAcl` and `s3:PutObjectVersionAcl` in its inline policy. Per
+bucket:
+
+```bash
+aws s3api put-bucket-ownership-controls --bucket <bucket> \
+  --ownership-controls 'Rules=[{ObjectOwnership=BucketOwnerPreferred}]'
+aws s3api put-public-access-block --bucket <bucket> \
+  --public-access-block-configuration 'BlockPublicAcls=false,IgnorePublicAcls=false,BlockPublicPolicy=false,RestrictPublicBuckets=false'
+```
 
 ## The Android `local` build (optional)
 

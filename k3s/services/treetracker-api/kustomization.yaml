@@ -1,7 +1,7 @@
 # Local (k3d) overlay for treetracker-api, reuses the repo's base, but:
 #  - replaces the 3 SealedSecrets with plain local Secrets (secrets.yaml)
-#  - drops the Ambassador Mapping, the db-migration Job + its k8s-wait-for RBAC
-#    (migrations are run separately into the treetracker schema; no CRDs/controllers locally)
+#  - drops the db-migration Job + its k8s-wait-for RBAC
+#    (migrations are run separately into the treetracker schema); the Ambassador Mapping is KEPT
 #  - uses the locally-built image, 1 replica, no DigitalOcean node-affinity
 # Serves POST /grower_accounts (needed by transformer-v2's wallet_registration flow) on :3006.
 apiVersion: kustomize.config.k8s.io/v1beta1
