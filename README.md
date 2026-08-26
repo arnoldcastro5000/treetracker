@@ -8,7 +8,7 @@ This repository is the umbrella for the Treetracker platform. It contains every 
 git submodule. The `k3s/` directory holds a stand-alone Kubernetes environment that runs the
 platform on your own machine. The default standup is the capture pipeline (Android app uploads ->
 processing -> admin verification). The wallet app and more subsystems are opt-ins. You need no
-secrets and no access to Greenstand servers.
+secrets and no access to Greenstand servers. For help, open an issue on this repository.
 
 ## Quickstart
 
