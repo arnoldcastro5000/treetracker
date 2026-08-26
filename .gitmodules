@@ -48,3 +48,4 @@
 	url = https://github.com/Greenstand/images-api.git
 [submodule "node-mapnik-1"]
 	path = node-mapnik-1
+	url = https://github.com/Greenstand/node-mapnik-1.git
