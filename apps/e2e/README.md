@@ -198,6 +198,41 @@ Active scenarios: `02_signup_flow` (language → signup → dashboard) and `03_c
 
 ---
 
+## Run in GitHub Actions
+
+Two workflows run this suite in CI. Neither needs a local emulator; CI is the normal way to run
+the full pipeline.
+
+**`android-e2e-route2.yml`** (Android E2E, Route 2, co-located) is the full run: it stands up the
+whole backend (k3d capture pipeline + LocalStack) and an accelerated emulator in one job, then
+drives the real `local` APK through capture → upload → admin `/verify`. A full run takes roughly
+25 minutes. Two triggers:
+
+- Manual dispatch, with a `stage` input (1 = coexistence, 2 = upload fidelity, 3 = full `/verify`;
+  default 3):
+  ```bash
+  gh workflow run android-e2e-route2.yml --ref <branch> -f stage=3
+  gh run list --workflow android-e2e-route2.yml
+  gh run watch <run-id>
+  gh run download <run-id>      # evidence artifact: video, screenshots, logcat, reports
+  ```
+- A push to any branch whose name contains `route2-e2e` starts the full run automatically (a
+  docs-only push is skipped). Pick a branch name without that pattern when you do not want CI.
+
+The run summary starts with the Capture Journey report: a table that traces the capture from the
+Android UI through the backend pipeline to `/verify` and names the hop where a failed run stopped.
+
+**`android-e2e.yml`** (Android E2E) is the fast offline check: it runs `02_signup_flow` on an
+emulator with no backend. It triggers on manual dispatch (a `spec` input selects the feature
+file), on a push to a branch whose name contains `android-e2e`, and on PRs that touch `apps/e2e`,
+`treetracker-android`, or the workflow itself:
+
+```bash
+gh workflow run android-e2e.yml --ref <branch> -f spec=02_signup_flow.feature
+```
+
+---
+
 ## Notes & gotchas
 
 - **Admin ingest latency**: on production the capture can take ~10 min to appear on `/verify`; the
