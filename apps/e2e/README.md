@@ -1,4 +1,4 @@
-# Treetracker Android — E2E Tests
+# Treetracker Android E2E Tests
 
 End-to-end UI tests for the Android app, driven by **WebdriverIO + Appium + Cucumber**.
 The on-device flow runs against an Android emulator; the capture-verification step drives a
@@ -10,8 +10,9 @@ panel URL are all read from env (`APK_PATH`, `APP_PACKAGE`, `ADMIN_URL`).
 
 > **Location:** this suite was relocated from `treetracker-android/e2e` to **`apps/e2e`** at the monorepo
 > root (sibling of `apps/bdd`). It is a standalone npm project (`npm install` here).
-> The default `.env` targets the **`local`** build (real-AWS `treetracker-local-*` env + local k3s); see
-> the AWS `local` environment and Android `local` build sections in `k3s/README.md`.
+> Copy `.env.example` to `.env` to configure a run. The LOCAL section below targets the **`local`**
+> build (real-AWS `treetracker-local-*` env + local k3s); see the AWS `local` environment and
+> Android `local` build sections in `k3s/README.md`.
 
 ---
 
@@ -29,13 +30,14 @@ panel URL are all read from env (`APK_PATH`, `APP_PACKAGE`, `ADMIN_URL`).
   emulator -avd <your_avd> &        # or launch from Android Studio
   adb devices                        # -> emulator-5554   device
   ```
-- **JDK 17** to build the app (newer JDKs can break the Android Gradle Plugin):
+- **JDK 17** to build the app (the version CI builds with; the newest JDKs break the Android
+  Gradle Plugin). On macOS, find it with:
   ```bash
   /usr/libexec/java_home -v 17
   ```
 - **Node deps**:
   ```bash
-  cd e2e && npm install
+  cd apps/e2e && npm install
   ```
 - **ChromeDriver matching your desktop Chrome major version** (used for the admin-panel step).
   The `chromedriver` npm dep must match installed Chrome (e.g. Chrome 148 → chromedriver 148).
@@ -46,7 +48,7 @@ panel URL are all read from env (`APK_PATH`, `APP_PACKAGE`, `ADMIN_URL`).
 
 ---
 
-## `e2e/.env` reference
+## `apps/e2e/.env` reference
 
 | Var | Purpose |
 |-----|---------|
@@ -67,16 +69,16 @@ pipeline + admin panel running (Phase 2).
 1. Build + install the **local** APK (from `treetracker-android/`):
    ```bash
    cd ../../treetracker-android
-   JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=/opt/homebrew/share/android-commandlinetools \
+   JAVA_HOME=<jdk-17 home> ANDROID_HOME=<your SDK path> \
      ./gradlew :app:assembleLocal
    adb -s emulator-5554 install -r app/build/outputs/apk/local/app-local.apk
    ```
-2. Boot the emulator (an AVD `greenstand_test` already exists):
+2. Boot an emulator (create an AVD once, via Android Studio or `avdmanager`):
    ```bash
-   emulator -avd greenstand_test &
+   emulator -avd <your_avd> &
    adb wait-for-device           # -> emulator-5554
    ```
-3. `.env` (the committed default already points here):
+3. Copy `.env.example` to `.env` and point it at the local build:
    ```ini
    APK_PATH=<repo>/treetracker-android/app/build/outputs/apk/local/app-local.apk
    APP_PACKAGE=org.greenstand.android.TreeTracker.local
@@ -97,13 +99,13 @@ Dev build → dev backend/S3 → dev admin panel.
 
 1. Build + install the **dev** APK:
    ```bash
-   cd ..        # treetracker-android root
-   JAVA_HOME=$(/usr/libexec/java_home -v 17) ANDROID_HOME=$ANDROID_HOME ./gradlew assembleDev
+   cd ../../treetracker-android
+   JAVA_HOME=<jdk-17 home> ./gradlew assembleDev
    adb -s emulator-5554 install -r app/build/outputs/apk/dev/app-dev.apk
    ```
    (Requires `s3_dev_identity_pool_id` in the gitignored `treetracker.keys.properties`.)
 
-2. `e2e/.env`:
+2. `apps/e2e/.env`:
    ```ini
    ADMIN_USER=test
    ADMIN_PASSWORD=<dev-admin-password>
@@ -115,7 +117,7 @@ Dev build → dev backend/S3 → dev admin panel.
 
 3. Run:
    ```bash
-   cd e2e && npm test
+   cd ../../apps/e2e && npm test
    ```
 
 ---
@@ -125,9 +127,9 @@ Dev build → dev backend/S3 → dev admin panel.
 Production-environment build → **prod** backend/S3 → **production** admin panel.
 Use either build variant (same production data path):
 
-- **`prerelease`** (recommended) — production environment, **debug-signed** so it installs without a
+- **`prerelease`** (recommended): production environment, **debug-signed** so it installs without a
   release keystore. Package: `org.greenstand.android.TreeTracker.prerelease`.
-- **`release`** — true production: minified (R8) + **release-signed**. Needs the release keystore;
+- **`release`**: true production, minified (R8) + **release-signed**. Needs the release keystore;
   package: `org.greenstand.android.TreeTracker`.
 
 ### Required production keys
@@ -136,7 +138,7 @@ In the gitignored `treetracker.keys.properties` (repo root):
 s3_production_identity_pool_id=<real Cognito identity pool>   # REQUIRED for upload to prod S3
 prod_treetracker_client_id=<real>                            # (only used by the Messages feature)
 prod_treetracker_client_secret=<real>
-# release builds only — signing keystore:
+# release builds only: signing keystore
 release_store_file=<abs path to .keystore>
 release_store_password=<...>
 release_key_alias=<...>
@@ -145,8 +147,8 @@ release_key_password=<...>
 
 ### Build + install
 ```bash
-cd ..        # treetracker-android root
-export JAVA_HOME=$(/usr/libexec/java_home -v 17)
+cd ../../treetracker-android
+export JAVA_HOME=<jdk-17 home>
 
 # prerelease (debug-signed, installs as-is):
 ./gradlew assemblePrerelease
@@ -157,7 +159,7 @@ adb -s emulator-5554 install -r app/build/outputs/apk/prerelease/app-prerelease.
 adb -s emulator-5554 install -r app/build/outputs/apk/release/app-release.apk
 ```
 
-### `e2e/.env`
+### `apps/e2e/.env`
 ```ini
 ADMIN_USER=test
 ADMIN_PASSWORD=<prod-admin-password>
@@ -173,7 +175,7 @@ APP_PACKAGE=org.greenstand.android.TreeTracker.prerelease
 
 ### Run
 ```bash
-cd e2e && npm test
+cd ../../apps/e2e && npm test
 ```
 
 > ⚠️ A passing run **uploads a real capture to production** S3 + admin. The capture-verify step
@@ -204,8 +206,8 @@ Active scenarios: `02_signup_flow` (language → signup → dashboard) and `03_c
   note ("fingerprint") stamped into the captured tree. This is reliable on the sparse dev `/verify`;
   on the high-volume production queue it depends on the capture being near the top (and the default
   filter), so the production verify step can be flaky.
-- **ChromeDriver / Chrome mismatch** is the most common admin-step failure — keep them on the same
+- **ChromeDriver / Chrome mismatch** is the most common admin-step failure; keep them on the same
   major version.
 - **`noReset: true`**: app data persists between scenarios. `03` relies on a user signed up by `02`
   (run order is alphabetical, so `02` precedes `03`).
-- Test artifacts (videos, screenshots, admin-debug dumps) land in `e2e/test-artifacts/`.
+- Test artifacts (videos, screenshots, admin-debug dumps) land in `apps/e2e/test-artifacts/`.
