@@ -10,8 +10,8 @@ panel URL are all read from env (`APK_PATH`, `APP_PACKAGE`, `ADMIN_URL`).
 
 > **Location:** this suite was relocated from `treetracker-android/e2e` to **`apps/e2e`** at the monorepo
 > root (sibling of `apps/bdd`). It is a standalone npm project (`npm install` here).
-> The default `.env` targets the **`local`** build (real-AWS `treetracker-local-*` env + local k3s) — see
-> the root `CLAUDE.md` "Local Test Environment".
+> The default `.env` targets the **`local`** build (real-AWS `treetracker-local-*` env + local k3s); see
+> the AWS `local` environment and Android `local` build sections in `k3s/README.md`.
 
 ---
 
