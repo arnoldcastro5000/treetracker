@@ -10,6 +10,10 @@ platform on your own machine. The default standup is the capture pipeline (Andro
 processing -> admin verification). The wallet app and more subsystems are opt-ins. You need no
 secrets and no access to Greenstand servers. For help, open an issue on this repository.
 
+Status: this monorepo is in the build stage. Greenstand production currently deploys from the
+individual repositories; this repository is being validated as the future single deployment
+source. The local environment below works today.
+
 ## Quickstart
 
 ```bash
