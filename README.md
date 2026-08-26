@@ -1,5 +1,9 @@
 # Greenstand Treetracker monorepo
 
+Treetracker tracks and verifies tree planting by smallholder growers, so growers can be paid for
+the trees they grow. It is a project of [Greenstand](https://greenstand.org); the upstream code
+lives in the [Greenstand GitHub organization](https://github.com/Greenstand).
+
 This repository is the umbrella for the Treetracker platform. It contains every application as a
 git submodule. The `k3s/` directory holds a stand-alone Kubernetes environment that runs the
 platform on your own machine. The default standup is the capture pipeline (Android app uploads ->
@@ -52,14 +56,13 @@ The clone pins every submodule to the exact commit this environment was validate
 switch submodule branches for a normal standup. Developers who work on a submodule can opt in to
 branch tips with `FOLLOW_SUBMODULE_BRANCHES=1 ./k3s/prepare-linux.sh`.
 
-## Android end-to-end tests
-
-The full Android e2e suite (real APK in an emulator against this stack) runs in GitHub Actions;
-see `.github/workflows/android-e2e-route2.yml` and `apps/e2e/`. Running it locally is optional and
-needs the emulator hardware above.
-
 ## More documentation
 
-- `k3s/README.md`: how the environment works.
-- `k3s/services/README.md`: the stand-up adapter contract (how to add a subsystem).
-- `apps/e2e/docs/`: the e2e suite.
+- Volunteers: [`k3s/README.md`](k3s/README.md) explains how the local environment works.
+- Contributors: [`k3s/services/README.md`](k3s/services/README.md) holds the stand-up adapter
+  contract (how to add a subsystem). The Android end-to-end suite (a real APK in an emulator
+  against this stack) lives in [`apps/e2e/`](apps/e2e/) and runs in GitHub Actions
+  (`.github/workflows/android-e2e-route2.yml`); a local run is optional and needs the emulator
+  hardware above.
+- Operators: `docs/production/` will hold the production profile documentation. It arrives with
+  the production-profile work.
