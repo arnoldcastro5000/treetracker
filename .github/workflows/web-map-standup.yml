@@ -95,12 +95,12 @@ jobs:
           } | tee "$DIR/components.txt" >> "$GITHUB_STEP_SUMMARY"
           kubectl get svc -A > "$DIR/services.txt" 2>&1 || true
 
-      # Diagnostics for a failed run: the webmap + capture pods and their recent logs,
-      # plus each image build's output (up.sh writes /tmp/up-<name>-build.log) so a
-      # standup build failure - the node-mapnik build especially - is diagnosable after
-      # the fact (ticket 28: an unlogged build failure's root line was unrecoverable).
+      # Always-on diagnostics: the webmap + capture pods and their recent logs, plus each
+      # image build's output (up.sh writes /tmp/up-<name>-build.log). On a green run these
+      # document the standup (the node-mapnik build log especially); on a red one they are
+      # the forensics (ticket 28: an unlogged build failure's root line was unrecoverable).
       - name: Collect k8s diagnostics
-        if: failure()
+        if: always()
         run: |
           DIR=test-artifacts/k8s
           mkdir -p "$DIR"
