@@ -3,10 +3,15 @@
 # emulator in ONE ubuntu-latest job, then drives the real `.local` APK through the
 # full capture -> upload -> pipeline -> admin /verify loop against that local stack.
 #
+# It ALSO stands up the opt-in web-map thin spine (node-mapnik tile server + query-api
+# + Next.js client) on top of the same capture backend and verifies it, so one run
+# covers the app-upload loop AND the web-map read path.
+#
 # This is the CI arm of the "Validate the real app upload fidelity" effort. It is
 # SEPARATE from the fast, PR-gated, offline android-e2e.yml (02_signup_flow), which
-# must never regress. This heavy job runs on demand / on a branch pattern, never on
-# every PR (see .scratch/volunteer-e2e-ci/issues/21-colocated-route2-ci-job-shape.md).
+# must never regress. This heavy job runs on EVERY code or configuration change (any
+# branch); a docs-only push is skipped
+# (see .scratch/volunteer-e2e-ci/issues/21-colocated-route2-ci-job-shape.md).
 #
 # First-green is STAGED so a red run points at one cause:
 #   stage 1  coexistence : stack up + smoke + two-file backend test + emulator boots
@@ -26,24 +31,28 @@ on:
         default: "3"
         options: ["1", "2", "3"]
   push:
-    branches:
-      - "**route2-e2e**"
-    # A docs-only change must not spend a full ~25-min stack+emulator run. A push with
-    # ONLY these paths is skipped; any code change (workflow included) still runs.
+    # Runs on EVERY code or configuration change, on any branch. A docs-only push is
+    # skipped: when ALL changed files match these patterns the run does not start; a push
+    # that mixes docs with any code/config change still runs.
     paths-ignore:
       - "**/*.md"
+      - "docs/**"
       - "apps/e2e/docs/**"
-  # Once reliably green, enable a slow cadence instead of leaning on manual dispatch:
-  # schedule:
-  #   - cron: "0 4 * * *"   # nightly 04:00 UTC
+
+# One run per branch: a newer push cancels the in-flight run for the same ref so rapid
+# pushes do not pile up ~1-2h jobs on the runners.
+concurrency:
+  group: e2e-route2-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   e2e-route2:
     runs-on: ubuntu-latest
-    # Cold: builds ~9 pipeline images + boots k3d + LocalStack + the emulator, then
-    # runs 03 (processor CronJob is minute-cadenced). Generous ceiling; ticket 20
-    # flags a standard public runner as tight.
-    timeout-minutes: 90
+    # Cold: builds ~9 capture pipeline images + the 3 web-map images (node-mapnik is the
+    # long pole) + boots k3d + LocalStack + the emulator, then runs 03 (processor CronJob
+    # is minute-cadenced). Raised to 120 for the added web-map standup; ticket 20 flags a
+    # standard public runner as tight.
+    timeout-minutes: 120
 
     steps:
       - name: Checkout (with submodules)
@@ -145,6 +154,31 @@ jobs:
 
       - name: Verify stack (smoke gate)
         run: ./k3s/up.sh verify capture
+
+      # Stand up the opt-in web-map thin spine on top of the capture backend: node-mapnik
+      # tile server (/tiles/), query-api (/query/ + the /webmap/ compat prefix), the
+      # Next.js client (/map), and the empty webmap.* schema hook, all behind the shared
+      # gateway. It reads the capture stack's treetracker DB (trees) + images-api, so it
+      # MUST come after the capture standup above.
+      - name: Stand up web-map spine (up.sh web-map)
+        run: ./k3s/up.sh web-map
+
+      # Definition-of-done for the thin spine: client HTML at /map/, query-api JSON on
+      # /query/ AND the /webmap/ compat prefix, a z16 tile PNG over the Buwagi capture
+      # area, and the webmap.* schema. With no captured trees yet the data-conditional dot
+      # check is skipped; everything else must be green.
+      - name: Verify web-map spine
+        run: ./k3s/up.sh verify web-map
+
+      # The capture + web-map image builds now live in k3d's containerd; the docker build
+      # cache and dangling layers are no longer needed. Reclaim that space before the
+      # emulator downloads its system image, to keep this single runner off the disk edge.
+      - name: Reclaim docker build space
+        run: |
+          echo "== disk before reclaim =="; df -h /
+          docker builder prune -af || true
+          docker image prune -f || true
+          echo "== disk after reclaim =="; df -h /
 
       # Backend proof that the REAL two-file upload pattern flows end to end, in both
       # orders (happy path + orphan self-heal). Runs without the emulator, so it is the
@@ -330,7 +364,7 @@ jobs:
           cp /tmp/up-*-build.log "$DIR/" 2>/dev/null || true
           kubectl get pods -A -o wide                    > "$DIR/pods.txt" 2>&1 || true
           kubectl get events -A --sort-by=.lastTimestamp > "$DIR/events.txt" 2>&1 || true
-          for ns in data object-storage bulk-pack-services field-data-api \
+          for ns in webmap data object-storage bulk-pack-services field-data-api \
                     treetracker-api images-api admin-api admin-client emissary; do
             for pod in $(kubectl -n "$ns" get pods -o name 2>/dev/null); do
               name="${pod#pod/}"
