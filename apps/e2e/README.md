@@ -85,8 +85,9 @@ pipeline + admin panel running (Phase 2).
    DEVICE_NAME=emulator-5554
    ADMIN_URL=<local admin-client URL>   # only used by 03_capture_setup
    ```
-4. Run signup:
+4. Run signup (back in `apps/e2e`):
    ```bash
+   cd ../apps/e2e
    npm install
    npx wdio run ./wdio.conf.ts --spec features/02_signup_flow.feature
    ```
@@ -117,7 +118,7 @@ Dev build → dev backend/S3 → dev admin panel.
 
 3. Run:
    ```bash
-   cd ../../apps/e2e && npm test
+   cd ../apps/e2e && npm test
    ```
 
 ---
@@ -175,7 +176,7 @@ APP_PACKAGE=org.greenstand.android.TreeTracker.prerelease
 
 ### Run
 ```bash
-cd ../../apps/e2e && npm test
+cd ../apps/e2e && npm test
 ```
 
 > ⚠️ A passing run **uploads a real capture to production** S3 + admin. The capture-verify step
