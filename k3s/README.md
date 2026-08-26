@@ -106,8 +106,9 @@ aws s3api put-public-access-block --bucket <bucket> \
 The `local` build type (`treetracker-android/app/build.gradle`) wires the app to the resources
 above and points `API_GATEWAY` at the local ingress. Build notes:
 
-- Use JDK 21 and set `ANDROID_HOME` (or `sdk.dir` in the gitignored `local.properties`). Gradle
-  8.13 rejects newer JDKs.
+- Use JDK 17 (the version CI builds with; see `.github/workflows/android-e2e-route2.yml`) and set
+  `ANDROID_HOME` (or `sdk.dir` in the gitignored `local.properties`). JDK 21 also works; Gradle
+  8.13 rejects the newest JDKs.
 - `app/google-services.json` has a `.local` client, so the Firebase plugin accepts the package.
 - Build with `./gradlew :app:assembleLocal`. The APK is
   `app/build/outputs/apk/local/app-local.apk`, package
