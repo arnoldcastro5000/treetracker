@@ -1,0 +1,129 @@
+# Web-map thin-spine CI: stands up the capture backend in k3d, then the opt-in
+# web-map adapter on top of it, and runs the adapter's own verify (client HTML at
+# /map/, query-api JSON on /query/ and the /webmap/ compat prefix, a z16 tile PNG
+# over the seeded capture area, and the webmap.* schema) through the shared gateway.
+#
+# Why capture stands up FIRST: the web-map spine reads the capture stack's
+# `treetracker` database (trees.estimated_geometric_location) and its images-api;
+# the web-map pre-hook provisions only the empty webmap.* enrichment schema, not the
+# `trees` table. So query-api and the tile render need the capture schema underneath,
+# exactly as the ticket-13 local verify ran (web-map added onto a standing cluster).
+# An empty DB still passes verify: zero trees skips the data-conditional dot check.
+#
+# This is SEPARATE from the Android route2 job. It NEVER runs on every PR: manual
+# dispatch, or a push to a branch whose name contains "web-map" (docs-only excepted).
+name: Web-map thin-spine standup
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "**web-map**"
+    # A docs-only change must not spend a full stack build; any code change still runs.
+    paths-ignore:
+      - "**/*.md"
+      - "apps/e2e/docs/**"
+
+jobs:
+  web-map-standup:
+    runs-on: ubuntu-latest
+    # Cold: builds the capture pipeline images plus the three web-map images (the
+    # node-mapnik tile server is the long pole). Generous ceiling like route2.
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # The capture pipeline plus the three web-map images (node-mapnik included) build
+      # against ubuntu-latest's ~14 GB free disk. Reclaim space from large preinstalled
+      # toolchains this job never uses; no emulator/APK here, so the Android SDK goes too.
+      - name: Free up disk space
+        run: |
+          echo "== disk before =="; df -h /
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup \
+            /opt/hostedtoolcache/CodeQL /usr/share/swift /usr/local/lib/android || true
+          echo "== disk after =="; df -h /
+
+      # Installs the k3d/kubectl/yq/helm the orchestrator needs (Docker is preinstalled
+      # on ubuntu-latest). up.sh then creates the k3d cluster and the stack itself.
+      # SKIP_SUBMODULE_BRANCHES: the checkout above already pinned every submodule to its
+      # superproject commit, so prepare-linux must not force them onto the k3s branch.
+      - name: Install cluster tools
+        env:
+          SKIP_SUBMODULE_BRANCHES: "1"
+        run: ./k3s/prepare-linux.sh
+
+      # Stand up the capture subsystem first: it provisions the `treetracker` database
+      # schema (trees + field_data) and images-api that the web-map spine reads.
+      - name: Stand up capture stack (up.sh capture)
+        run: ./k3s/up.sh capture
+
+      - name: Verify capture stack (smoke gate)
+        run: ./k3s/up.sh verify capture
+
+      # Stand up the opt-in web-map adapter on top: node-mapnik tile server (/tiles/),
+      # query-api (/query/ and /webmap/), the Next.js client (/map), and the empty
+      # webmap.* schema hook, all behind the shared gateway.
+      - name: Stand up web-map spine (up.sh web-map)
+        run: ./k3s/up.sh web-map
+
+      # The definition-of-done for the thin spine (client HTML, query JSON on both
+      # prefixes, a z16 tile PNG over the Buwagi capture area, the webmap schema). With
+      # no captured trees the data-conditional dot check is skipped; everything else must
+      # be green.
+      - name: Verify web-map spine
+        run: ./k3s/up.sh verify web-map
+
+      # Always-on component status roster, captured while the cluster is still up (before
+      # teardown): every pod + deployment readiness, to the artifacts AND the run summary
+      # so each run is self-documenting.
+      - name: Component status report
+        if: always()
+        run: |
+          DIR=test-artifacts/status
+          mkdir -p "$DIR"
+          {
+            echo "### Component status"
+            echo '```'
+            kubectl get pods -A -o wide 2>&1 || true
+            echo
+            kubectl get deploy,cronjob -A 2>&1 || true
+            echo '```'
+          } | tee "$DIR/components.txt" >> "$GITHUB_STEP_SUMMARY"
+          kubectl get svc -A > "$DIR/services.txt" 2>&1 || true
+
+      # Diagnostics for a failed run: the webmap + capture pods and their recent logs,
+      # plus each image build's output (up.sh writes /tmp/up-<name>-build.log) so a
+      # standup build failure - the node-mapnik build especially - is diagnosable after
+      # the fact (ticket 28: an unlogged build failure's root line was unrecoverable).
+      - name: Collect k8s diagnostics
+        if: failure()
+        run: |
+          DIR=test-artifacts/k8s
+          mkdir -p "$DIR"
+          cp /tmp/up-*-build.log "$DIR/" 2>/dev/null || true
+          kubectl get pods -A -o wide                    > "$DIR/pods.txt" 2>&1 || true
+          kubectl get events -A --sort-by=.lastTimestamp > "$DIR/events.txt" 2>&1 || true
+          for ns in webmap data object-storage bulk-pack-services field-data-api \
+                    treetracker-api images-api admin-api admin-client emissary; do
+            for pod in $(kubectl -n "$ns" get pods -o name 2>/dev/null); do
+              name="${pod#pod/}"
+              kubectl -n "$ns" logs --all-containers --tail=300 "$pod" \
+                > "$DIR/logs-$ns-$name.txt" 2>&1 || true
+            done
+          done
+
+      - name: Upload evidence artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-map-standup-evidence
+          path: test-artifacts/
+          if-no-files-found: warn
+
+      - name: Tear down cluster
+        if: always()
+        run: ./k3s/down.sh || true
