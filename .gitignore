@@ -26,3 +26,8 @@ test-artifacts
 
 # Keep the e2e config template tracked (broad .env* rule above ignores it)
 !apps/e2e/.env.example
+
+# Agent-local files at the repo root, never committed
+/CLAUDE.md
+/E2E_PLAN.md
+/handoff.md
