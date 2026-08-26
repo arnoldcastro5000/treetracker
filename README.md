@@ -1,8 +1,8 @@
 # Greenstand Treetracker monorepo
 
-Treetracker tracks and verifies tree planting by smallholder growers, so growers can be paid for
-the trees they grow. It is a project of [Greenstand](https://greenstand.org); the upstream code
-lives in the [Greenstand GitHub organization](https://github.com/Greenstand).
+Treetracker tracks and verifies the trees that smallholder growers plant, so organizations can
+pay the growers. Treetracker is a project of [Greenstand](https://greenstand.org), and the
+upstream code is in the [Greenstand GitHub organization](https://github.com/Greenstand).
 
 This repository is the umbrella for the Treetracker platform. It contains every application as a
 git submodule. The `k3s/` directory holds a stand-alone Kubernetes environment that runs the
@@ -39,7 +39,7 @@ Useful variants:
   tools (kubectl, k3d, helm, yq, jq, psql; macOS via Homebrew).
 - Hardware floor: 4 CPU cores, 8 GB RAM, ~20 GB free disk for the core stack. The optional local
   Android emulator work needs 16 GB RAM and KVM; the Android e2e suite normally runs in CI instead
-  (see below).
+  (`.github/workflows/android-e2e-route2.yml`).
 - Host ports 8088 (HTTP) and 8443 (HTTPS) must be free. Override with `GATEWAY_HTTP_PORT` /
   `GATEWAY_HTTPS_PORT` before the first `up.sh`.
 - Network: the standup pulls from these hosts. On a restricted network, allow them:
@@ -58,11 +58,9 @@ branch tips with `FOLLOW_SUBMODULE_BRANCHES=1 ./k3s/prepare-linux.sh`.
 
 ## More documentation
 
-- Volunteers: [`k3s/README.md`](k3s/README.md) explains how the local environment works.
-- Contributors: [`k3s/services/README.md`](k3s/services/README.md) holds the stand-up adapter
-  contract (how to add a subsystem). The Android end-to-end suite (a real APK in an emulator
-  against this stack) lives in [`apps/e2e/`](apps/e2e/) and runs in GitHub Actions
-  (`.github/workflows/android-e2e-route2.yml`); a local run is optional and needs the emulator
-  hardware above.
-- Operators: `docs/production/` will hold the production profile documentation. It arrives with
-  the production-profile work.
+- Volunteers: [`k3s/README.md`](k3s/README.md) describes how the local environment works.
+- Contributors: [`k3s/services/README.md`](k3s/services/README.md) describes the stand-up adapter
+  contract (how to add a subsystem), and [`apps/e2e/`](apps/e2e/) contains the Android end-to-end
+  suite.
+- Operators: `docs/production/` will describe the production profile. The production-profile work
+  creates that directory.
