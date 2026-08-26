@@ -1,0 +1,50 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: treetracker-tile-server
+  labels:
+    app: treetracker-tile-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: treetracker-tile-server
+  template:
+    metadata:
+      labels:
+        app: treetracker-tile-server
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: doks.digitalocean.com/node-pool
+                operator: In
+                values:
+                - microservices-node-pool
+      containers:
+        - name: treetracker-tile-server
+          image: greenstand/treetracker-map-tile-server:VERSION
+          ports:
+            - containerPort: 80
+          env:
+            - name: PORT
+              value: "3000"
+            - name: PG_POOL_SIZE
+              value: "20"
+            - name: CACHE_SIZE
+              value: "10000"
+            - name: CACHE_EXPIRE
+              value: "60000"
+            - name: NODE_TLS_REJECT_UNAUTHORIZED
+              value: "0"
+            - name: MAXIMUM_ZOOM_LEVEL_USING_GLOBAL_DATASET
+              value: "6"
+            - name: MAXIMUM_ZOOM_LEVEL_HANDLING_ZOOM_TARGET
+              value: "6"
+            - name: DB_URL
+              valueFrom:
+                secretKeyRef:
+                  name: database-connection
+                  key: db

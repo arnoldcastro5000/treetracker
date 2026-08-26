@@ -1,0 +1,48 @@
+# Stand-up adapter: the web-map THIN SPINE (web-map-standalone child map, decisions 01-07).
+# The map loads at /map and tree dots render from the shared Postgres at z>15, served by
+# web-map-client (Next.js) + the node-mapnik-1 tile server (/tiles/) + query-api (/query/ and the
+# /webmap/ compat prefix) + the capture stack's images-api (/images/). Deeper features (live
+# enrichment via RabbitMQ, airflow mat views, nearest-tree, low/mid-zoom precomputed tiles) are
+# deliberate later opt-ins; low/mid zoom shows no dots locally by design (decision 07).
+name: web-map
+optIn: true
+dependsOn: [postgres, gateway]
+namespaces: [webmap]
+# Reads the capture stack's `treetracker` database (trees.estimated_geometric_location) plus the
+# webmap.* enrichment schema the pre hook provisions empty (decision 03). Declaring the db keeps
+# the adapter self-describing; the ensure step is idempotent.
+databases: [treetracker]
+images:
+  - name: tile-server
+    context: node-mapnik-1
+    # Repo Dockerfile downloads node from nodejs.org (blocked on restricted networks); this one
+    # takes the same node 14.21.3 from the official Docker Hub image.
+    dockerfile: k3s/services/web-map/tile-server.Dockerfile
+  - name: query-api
+    context: treetracker-query-api
+    # The repo Dockerfile expects a prebuilt dist/ from the host; this one builds inside the image
+    # (the host filesystem cannot npm ci, and hermetic builds fit the :local contract anyway).
+    dockerfile: k3s/services/web-map/query-api.Dockerfile
+  - name: web-map-client
+    context: treetracker-web-map-client
+    dockerfile: k3s/services/web-map/web-map-client.Dockerfile
+    extraContexts:
+      localdeploy: k3s/services/web-map
+secrets:
+  # Both repo bases read their DB URL from a secret; local = dummy-literal shared-Postgres creds.
+  - namespace: webmap
+    name: database-connection
+    literals:
+      db: postgresql://postgres:postgres@postgres.data.svc.cluster.local:5432/treetracker # gitleaks:allow betterleaks:allow dummy literal (adapter contract)
+  - namespace: webmap
+    name: query-api-database-connection
+    literals:
+      db: postgresql://postgres:postgres@postgres.data.svc.cluster.local:5432/treetracker # gitleaks:allow betterleaks:allow dummy literal (adapter contract)
+overlay: k3s/services/web-map
+waitFor:
+  - { namespace: webmap, deployment: treetracker-tile-server, image: tile-server:local }
+  - { namespace: webmap, deployment: treetracker-query-api,   image: query-api:local }
+  - { namespace: webmap, deployment: web-map-client,          image: web-map-client:local }
+hooks:
+  pre: k3s/services/web-map/hooks/webmap-schema.sh
+verify: k3s/services/web-map/verify.sh
