@@ -56,9 +56,64 @@ Useful variants:
 
 ## Submodules
 
-The clone pins every submodule to the exact commit this environment was validated with. Do not
-switch submodule branches for a normal standup. Developers who work on a submodule can opt in to
-branch tips with `FOLLOW_SUBMODULE_BRANCHES=1 ./k3s/prepare-linux.sh`.
+Every application lives in this repository as a git submodule. The clone pins each submodule to the
+exact commit this environment was validated with. Do not switch submodule branches for a normal
+standup. Developers who work on a submodule can opt in to branch tips with
+`FOLLOW_SUBMODULE_BRANCHES=1 ./k3s/prepare-linux.sh`.
+
+A submodule is "working" when it has a stand-up adapter in `k3s/`, starts on the local cluster, and
+passes its verify check. A submodule is "considered for integration" when the team plans to add it
+but has not built the adapter yet.
+
+### Working today
+
+These submodules stand up and verify on the local cluster. They are grouped by subsystem.
+
+**Capture pipeline** (the default `./k3s/up.sh`). An Android device uploads a tree capture, the
+pipeline processes it, and the admin panel verifies it.
+
+- `treetracker-android`: the Android capture app. It sends captures to the pipeline. It runs in
+  the end-to-end test suite (`apps/e2e`), not as a Kubernetes service.
+- `treetracker-database`: the shared Postgres schema. The capture standup loads it before the
+  services start.
+- `bulk-pack-consumer`: reads new uploads from the queue and hands them to the pipeline.
+- `bulk-pack-processor`: processes each upload bundle. It runs as a scheduled job (CronJob).
+- `bulk-pack-transformer`: transforms upload data (version 1).
+- `bulk-pack-transformer-v2`: transforms upload data (version 2; captures and tracks).
+- `treetracker-field-data`: the field-data API. It writes the final `raw_capture` rows.
+- `treetracker-api`: the core Treetracker API.
+- `images-api`: stores and serves the capture images.
+- `treetracker-admin-api`: the backend for the admin panel.
+- `treetracker-admin-client`: the admin panel web app. It serves the `/verify` page.
+
+**Wallet app** (opt-in: `./k3s/up.sh wallet-app`). The wallet web app, its backend, and a shared
+Keycloak for login.
+
+- `treetracker-wallet-app`: the wallet web app plus its user backend.
+- `treetracker-wallet-api`: the wallet backend API.
+
+**Web map** (opt-in: `./k3s/up.sh web-map`). A map that renders the tracked trees. It serves at
+`/map`.
+
+- `treetracker-web-map-client`: the map web app.
+- `treetracker-query-api`: serves the map data queries.
+- `node-mapnik-1`: the vector tile server. It renders the map tiles.
+
+### Considered for integration
+
+These are planned but not wired up yet. They do not stand up today.
+
+- `treetracker-infrastructure`: the upstream infrastructure and deploy configuration. It is
+  already a submodule in this repository, but it has no local adapter. The team keeps it as a
+  reference for the future production profile.
+- `wallet-admin-client` (not yet a submodule): the admin web app for wallets. It is planned as a
+  local adapter under the wallet subsystem.
+- `stakeholder-api` (not yet a submodule): the stakeholder (organization) API. It is planned for
+  both local and production.
+- `treetracker-airflow-dags` and Airflow (not yet a submodule): data pipeline orchestration. It
+  is planned for both local and production.
+- `webmap-query-service-consumer` (not yet a submodule): an enrichment step for the web map. It is
+  planned as an opt-in add-on to the web-map subsystem.
 
 ## More documentation
 
