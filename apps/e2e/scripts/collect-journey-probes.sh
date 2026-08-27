@@ -30,6 +30,11 @@ psql_q() { # $1=db  $2=sql  -> trimmed single value (empty on any failure)
   kubectl -n data exec -i "$POD" -- psql -U postgres -d "$1" -tAc "$2" 2>/dev/null | tr -d '[:space:]' || true
 }
 
+# One ISO 8601 UTC output format for every to_char timestamp query (the double-
+# quoted T and Z are SQL literals). Shared so the format never drifts between
+# queries. Used inside single quotes in the SQL: '${TS_FMT}'.
+TS_FMT='YYYY-MM-DD"T"HH24:MI:SS"Z"'
+
 # ── Android internals (logcat) ─────────────────────────────────────────────────
 CAPTURE=absent; CAPTURE_EV="no CameraXApp capture line"
 if has_log "Photo capture bypassed" || has_log "Photo capture succeeded"; then
@@ -47,19 +52,25 @@ if has_log "Bundle Tree Upload Completed"; then
 fi
 
 # ── S3 (best-effort; unknown back-fills from ingest) ───────────────────────────
-S3=unknown; S3_EV="not probed"
+S3=unknown; S3_EV="not probed"; S3_TS=""
 if command -v awslocal >/dev/null 2>&1; then
   if awslocal s3api list-objects-v2 --bucket treetracker-local-batch-uploads \
        --query 'Contents[].Key' --output text 2>/dev/null | grep -q '_captures.json'; then
     S3=present; S3_EV="_captures.json in bucket"
+    # LastModified of the captures object (ISO 8601 already); "None" if not found.
+    S3_TS=$(awslocal s3api list-objects-v2 --bucket treetracker-local-batch-uploads \
+      --query "Contents[?contains(Key, '_captures.json')].LastModified | [0]" --output text 2>/dev/null)
+    [ "$S3_TS" = "None" ] && S3_TS=""
   else
     S3=absent; S3_EV="no _captures.json in bucket"
   fi
 fi
 
 # ── ingest + processor (data_pipeline.bulk_tree_upload, keyed by fingerprint) ──
-INGEST=unknown; INGEST_EV="no DB access"
-PROCESSOR=unknown; PROCESSOR_EV="no DB access"
+# created_at / processed_at are `timestamp without time zone` storing UTC, so the
+# report reads them as UTC: format to ISO 8601 with a Z, no zone conversion.
+INGEST=unknown; INGEST_EV="no DB access"; INGEST_TS=""
+PROCESSOR=unknown; PROCESSOR_EV="no DB access"; PROCESSOR_TS=""
 if [ -n "$POD" ] && [ -n "$FP" ]; then
   # An empty result means the query itself failed (no DB access): keep "unknown",
   # never invent a stop. Only a real numeric 0 counts as "absent".
@@ -68,11 +79,17 @@ if [ -n "$POD" ] && [ -n "$FP" ]; then
     INGEST=unknown; INGEST_EV="ingest query failed"
   elif [ "$ROWS" -ge 1 ] 2>/dev/null; then
     INGEST=present; INGEST_EV="${ROWS} bulk_tree_upload row(s)"
+    INGEST_TS=$(psql_q data_pipeline "SELECT to_char(created_at,'${TS_FMT}') FROM public.bulk_tree_upload WHERE bulk_data::text LIKE '%${FP}%' ORDER BY created_at LIMIT 1")
     PROC=$(psql_q data_pipeline "SELECT processed FROM public.bulk_tree_upload WHERE bulk_data::text LIKE '%${FP}%' LIMIT 1")
     if [ "$PROC" = "t" ]; then
       PAT=$(psql_q data_pipeline "SELECT (processed_at IS NOT NULL) FROM public.bulk_tree_upload WHERE bulk_data::text LIKE '%${FP}%' LIMIT 1")
       PROCESSOR=present
-      if [ "$PAT" = "t" ]; then PROCESSOR_EV="processed=t, processed_at set"; else PROCESSOR_EV="processed=t, processed_at null"; fi
+      if [ "$PAT" = "t" ]; then
+        PROCESSOR_EV="processed=t, processed_at set"
+        PROCESSOR_TS=$(psql_q data_pipeline "SELECT to_char(processed_at,'${TS_FMT}') FROM public.bulk_tree_upload WHERE bulk_data::text LIKE '%${FP}%' AND processed_at IS NOT NULL LIMIT 1")
+      else
+        PROCESSOR_EV="processed=t, processed_at null"
+      fi
     elif [ "$PROC" = "f" ]; then
       PROCESSOR=absent; PROCESSOR_EV="processed=f (not yet processed)"
     else
@@ -91,13 +108,15 @@ fi
 TRANSFORMER=unknown; TRANSFORMER_EV="inferred from raw_capture"
 
 # ── raw_capture (field_data.raw_capture, keyed by fingerprint note) ────────────
-RAWCAP=unknown; RAWCAP_EV="no DB access"
+# created_at is timestamptz; convert to UTC for the report.
+RAWCAP=unknown; RAWCAP_EV="no DB access"; RAWCAP_TS=""
 if [ -n "$POD" ] && [ -n "$FP" ]; then
   RC=$(psql_q treetracker "SELECT count(*) FROM field_data.raw_capture WHERE note='${FP}'")
   if [ -z "$RC" ]; then
     RAWCAP=unknown; RAWCAP_EV="raw_capture query failed"
   elif [ "$RC" -ge 1 ] 2>/dev/null; then
     RAWCAP=present; RAWCAP_EV="${RC} raw_capture row(s)"
+    RAWCAP_TS=$(psql_q treetracker "SELECT to_char(created_at AT TIME ZONE 'UTC','${TS_FMT}') FROM field_data.raw_capture WHERE note='${FP}' ORDER BY created_at LIMIT 1")
   else
     RAWCAP=absent; RAWCAP_EV="no raw_capture row for fingerprint"
   fi
@@ -110,17 +129,21 @@ if [ -n "${E2E_SKIP_ADMIN_VERIFY:-}" ]; then
 fi
 
 # ── write probes.json ──────────────────────────────────────────────────────────
+# Only the probed backend hops (s3/ingest/processor/raw_capture) carry a "ts": the
+# log-derived hops (capture/bundle/upload) and the inferred transformer have no
+# queryable time, so they keep the 2-field shape. The report defaults a missing ts
+# to blank.
 {
   echo "{"
   [ -n "$VERIFY_LINE" ] && echo "$VERIFY_LINE"
   echo "  \"capture\": {\"signal\":\"$CAPTURE\",\"evidence\":\"$CAPTURE_EV\"},"
   echo "  \"bundle\": {\"signal\":\"$BUNDLE\",\"evidence\":\"$BUNDLE_EV\"},"
   echo "  \"upload\": {\"signal\":\"$UPLOAD\",\"evidence\":\"$UPLOAD_EV\"},"
-  echo "  \"s3\": {\"signal\":\"$S3\",\"evidence\":\"$S3_EV\"},"
-  echo "  \"ingest\": {\"signal\":\"$INGEST\",\"evidence\":\"$INGEST_EV\"},"
-  echo "  \"processor\": {\"signal\":\"$PROCESSOR\",\"evidence\":\"$PROCESSOR_EV\"},"
+  echo "  \"s3\": {\"signal\":\"$S3\",\"ts\":\"$S3_TS\",\"evidence\":\"$S3_EV\"},"
+  echo "  \"ingest\": {\"signal\":\"$INGEST\",\"ts\":\"$INGEST_TS\",\"evidence\":\"$INGEST_EV\"},"
+  echo "  \"processor\": {\"signal\":\"$PROCESSOR\",\"ts\":\"$PROCESSOR_TS\",\"evidence\":\"$PROCESSOR_EV\"},"
   echo "  \"transformer\": {\"signal\":\"$TRANSFORMER\",\"evidence\":\"$TRANSFORMER_EV\"},"
-  echo "  \"raw_capture\": {\"signal\":\"$RAWCAP\",\"evidence\":\"$RAWCAP_EV\"}"
+  echo "  \"raw_capture\": {\"signal\":\"$RAWCAP\",\"ts\":\"$RAWCAP_TS\",\"evidence\":\"$RAWCAP_EV\"}"
   echo "}"
 } > "$OUT"
 

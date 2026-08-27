@@ -124,8 +124,8 @@ const BACKEND_HOPS = [
   { key: "capture", layer: "Android internal", hop: "Capture (CameraX)", source: "logcat CameraXApp" },
   { key: "bundle", layer: "Android internal", hop: "Bundle build", source: "logcat TreeUploader" },
   { key: "upload", layer: "Android internal", hop: "Upload (app)", source: "logcat TreeUploader" },
-  { key: "s3", layer: "Backend", hop: "S3 object", source: "batch-uploads bucket" },
-  { key: "ingest", layer: "Backend", hop: "Ingest (bulk_tree_upload)", source: "data_pipeline DB" },
+  { key: "s3", layer: "Backend", hop: "S3 object", source: "batch-uploads LastModified" },
+  { key: "ingest", layer: "Backend", hop: "Ingest (bulk_tree_upload)", source: "bulk_tree_upload.created_at" },
   { key: "processor", layer: "Backend", hop: "Processor", source: "bulk_tree_upload.processed_at" },
   { key: "transformer", layer: "Backend", hop: "Transformer", source: "processor forward" },
   { key: "raw_capture", layer: "Backend", hop: "raw_capture", source: "field_data.raw_capture" },
@@ -151,7 +151,10 @@ function uiPhaseHop(phase, steps) {
     signal = "present";
     evidence = `${matched.length} step(s) passed`;
   }
-  return { key: phase.key, layer: "Android UI", hop: phase.hop, signal, source: "cucumber step", evidence };
+  // A phase spans one or more steps; its timestamp is when the phase last ran,
+  // i.e. the last matched step's time (blank if no step matched or none carried a time).
+  const ts = matched.length ? matched[matched.length - 1].ts || "" : "";
+  return { key: phase.key, layer: "Android UI", hop: phase.hop, signal, source: "cucumber step", evidence, ts };
 }
 
 export function assembleHops(run, probes) {
@@ -171,6 +174,7 @@ export function assembleHops(run, probes) {
       signal: p.signal || "unknown",
       source: h.source,
       evidence: p.evidence || "",
+      ts: p.ts || "",
     });
   }
 
@@ -188,7 +192,8 @@ export function assembleHops(run, probes) {
     vsignal = "absent";
     vevidence = "verify step did not run";
   }
-  hops.push({ key: "verify", layer: "Frontend", hop: "Admin /verify", signal: vsignal, source: "cucumber /verify", evidence: vevidence });
+  const vts = vprobe.signal === "skipped" ? "" : vstep ? vstep.ts || "" : "";
+  hops.push({ key: "verify", layer: "Frontend", hop: "Admin /verify", signal: vsignal, source: "cucumber /verify", evidence: vevidence, ts: vts });
 
   return hops;
 }
@@ -203,7 +208,22 @@ const SYMBOL = {
   SKIPPED: "–",
 };
 
-function render(result, meta) {
+// Format a hop timestamp for the report: the UTC wall clock (with a Z marker so
+// the reader knows it is UTC), plus a relative offset from the earliest hop
+// timestamp (baselineMs). A blank or unparseable timestamp renders blank, never
+// breaking the row.
+const pad2 = (n) => String(n).padStart(2, "0");
+export function formatClock(iso, baselineMs) {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return "";
+  const d = new Date(t);
+  const clock = `${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}:${pad2(d.getUTCSeconds())}Z`;
+  if (baselineMs == null || Number.isNaN(baselineMs) || t < baselineMs) return clock;
+  const off = Math.round((t - baselineMs) / 1000);
+  return `${clock} (+${Math.floor(off / 60)}:${pad2(off % 60)})`;
+}
+
+export function render(result, meta) {
   const lines = [];
   lines.push(`## ${result.headline}`);
   lines.push("");
@@ -215,11 +235,18 @@ function render(result, meta) {
     lines.push(bits.join(" &nbsp; "));
     lines.push("");
   }
-  lines.push("| Layer | Hop | Status | Signal source | Evidence |");
-  lines.push("| --- | --- | --- | --- | --- |");
+  // Baseline for the relative offset: the earliest hop timestamp (the first
+  // step, which is effectively scenario start; robust when a hop has no time).
+  const times = result.hops
+    .map((h) => Date.parse(h.ts))
+    .filter((t) => !Number.isNaN(t));
+  const baselineMs = times.length ? Math.min(...times) : null;
+  lines.push("| Layer | Hop | Status | Timestamp | Signal source | Evidence |");
+  lines.push("| --- | --- | --- | --- | --- | --- |");
   for (const h of result.hops) {
     const status = `${SYMBOL[h.status] || ""} ${h.status}`.trim();
-    lines.push(`| ${h.layer} | ${h.hop} | ${status} | ${h.source} | ${h.evidence || ""} |`);
+    const ts = formatClock(h.ts, baselineMs);
+    lines.push(`| ${h.layer} | ${h.hop} | ${status} | ${ts} | ${h.source} | ${h.evidence || ""} |`);
   }
   return lines.join("\n");
 }
