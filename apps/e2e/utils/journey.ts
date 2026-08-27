@@ -16,6 +16,8 @@ const RUN = path.join(JOURNEY_DIR, "run.json");
 interface StepRec {
   text: string;
   passed: boolean;
+  // UTC ISO 8601 time the step finished; drives the report's Timestamp column.
+  ts: string;
 }
 interface RunRec {
   feature: string;
@@ -45,7 +47,7 @@ export function journeySetFingerprint(fingerprint: string): void {
 
 export function journeyRecordStep(text: string, passed: boolean): void {
   if (!current) return;
-  current.steps.push({ text: text || "", passed });
+  current.steps.push({ text: text || "", passed, ts: new Date().toISOString() });
 }
 
 export function journeyEndScenario(): void {
