@@ -65,6 +65,10 @@ A submodule is "working" when it has a stand-up adapter in `k3s/`, starts on the
 passes its verify check. A submodule is "considered for integration" when the team plans to add it
 but has not built the adapter yet.
 
+For the detailed coverage of the monorepo against everything Greenstand runs in production (the
+21 / 8 / 10 / 16 breakdown), and how each item maps to a submodule, see
+[`docs/component-coverage.md`](docs/component-coverage.md).
+
 ### Working today
 
 These submodules stand up and verify on the local cluster. They are grouped by subsystem.
@@ -120,6 +124,7 @@ These are planned but not wired up yet. They do not stand up today.
 - Volunteers: [`k3s/README.md`](k3s/README.md) describes how the local environment works.
 - Contributors: [`k3s/services/README.md`](k3s/services/README.md) describes the stand-up adapter
   contract (how to add a subsystem), and [`apps/e2e/`](apps/e2e/) contains the Android end-to-end
-  suite.
+  suite. [`docs/component-coverage.md`](docs/component-coverage.md) shows how much of the production
+  estate the monorepo covers, mapped to submodules.
 - Operators: `docs/production/` will describe the production profile. The production-profile work
   creates that directory.
