@@ -53,6 +53,7 @@ LOCALSTACK_PORT="${LOCALSTACK_PORT:-4566}"
 OBJECT_STORAGE_REGION="${OBJECT_STORAGE_REGION:-eu-central-1}"
 BATCH_UPLOADS_BUCKET="${BATCH_UPLOADS_BUCKET:-treetracker-local-batch-uploads}"
 IMAGES_BUCKET="${IMAGES_BUCKET:-treetracker-local-images}"
+TRACKS_BUCKET="${TRACKS_BUCKET:-treetracker-local-tracks}"
 UPLOAD_QUEUE="${UPLOAD_QUEUE:-treetracker-local-queue}"
 
 ADMIN_USER="${ADMIN_USER:-test}"

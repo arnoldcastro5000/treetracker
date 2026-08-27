@@ -1,7 +1,13 @@
 # Local (k3d) overlay for bulk-pack-transformer-v2.
 # Reuses the base (deployment + service, whose default env already points
-# TREETRACKER_FIELD_DATA_URL at http://treetracker-field-data.field-data-api). Just adds the
-# namespace, the locally-built image, and drops the DigitalOcean node-affinity.
+# TREETRACKER_FIELD_DATA_URL at http://treetracker-field-data.field-data-api). Adds the namespace,
+# the locally-built image, and drops the DigitalOcean node-affinity.
+#
+# It also injects the S3 config the base lacks so POST /tracks can PutObject to the local S3:
+# S3_BUCKET + creds, plus the two LocalStack knobs (AWS_ENDPOINT + AWS_REGION). All come from the
+# secrets the capture adapter declares (aws-key-id, aws-key, tracks-bucket, localstack-endpoint),
+# so nothing is hardcoded here and no real AWS creds ever land in git. Mirrors the bulk-pack-consumer
+# overlay. The vendored image (see Dockerfile in this dir) makes the S3 client honor AWS_ENDPOINT.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: bulk-pack-services
@@ -17,3 +23,43 @@ patches:
     patch: |-
       - op: remove
         path: /spec/template/spec/affinity
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: S3_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              name: aws-key-id
+              key: accessKeyId
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: S3_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: aws-key
+              key: secretAccessKey
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: S3_BUCKET
+          valueFrom:
+            secretKeyRef:
+              name: tracks-bucket
+              key: bucket
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: AWS_ENDPOINT
+          valueFrom:
+            secretKeyRef:
+              name: localstack-endpoint
+              key: endpoint
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: AWS_REGION
+          valueFrom:
+            secretKeyRef:
+              name: localstack-endpoint
+              key: region

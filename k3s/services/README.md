@@ -67,11 +67,19 @@ For six services this is the `deployment/overlays/local` kustomize overlay (a th
 top of each submodule's committed `deployment/base`). For the admin-client it is the local build
 config (there is no kustomize base to reuse).
 
+Two services also vendor an override `Dockerfile` here (see the table). It builds from the submodule
+source as context and pulls extra files from the `localdeploy` named build context
+(`--build-context localdeploy=k3s/services/<name>`, wired by `up.sh` from the adapter's
+`extraContexts`). The admin-client overlays `nginx.conf` this way; bulk-pack-transformer-v2 overlays
+a submodule SOURCE file, `s3.js`, so the local image reaches LocalStack for its S3 upload. The
+vendored `s3.js` is a strict superset of upstream (endpoint honored only when `AWS_ENDPOINT` is set),
+so the submodule pin stays pristine and production behavior is unchanged.
+
 | Service | Source: repo `k3s` branch @ sha | Vendored files |
 |---|---|---|
 | treetracker-field-data | `c0fe3dd0` | `kustomization.yaml`, `secrets.yaml` |
 | treetracker-api | `5c2dbd29` | `kustomization.yaml`, `namespace.yaml`, `secrets.yaml` |
-| bulk-pack-transformer-v2 | `02f32f19` | `kustomization.yaml`, `namespace.yaml` |
+| bulk-pack-transformer-v2 | `02f32f19` | `kustomization.yaml`, `namespace.yaml`, `Dockerfile`, `s3.js` |
 | bulk-pack-processor | `657a3606` | `kustomization.yaml`, `cronjob.yaml` |
 | treetracker-admin-api | `a6c8fbee` | `kustomization.yaml`, `namespace.yaml`, `secrets.yaml` |
 | images-api | `c96d5a13` | `kustomization.yaml` |

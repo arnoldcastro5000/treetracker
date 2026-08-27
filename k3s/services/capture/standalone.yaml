@@ -23,6 +23,9 @@ images:
     context: images-api
   - name: bulk-pack-transformer-v2
     context: bulk-pack-transformer-v2
+    dockerfile: k3s/services/bulk-pack-transformer-v2/Dockerfile
+    extraContexts:
+      localdeploy: k3s/services/bulk-pack-transformer-v2
   - name: bulk-pack-transformer
     context: bulk-pack-transformer
     dockerfile: k3s/services/bulk-pack-transformer/Dockerfile
@@ -66,12 +69,19 @@ secrets:
     literals:
       endpoint: http://host.k3d.internal:${LOCALSTACK_PORT}
       region: ${OBJECT_STORAGE_REGION}
+  # bulk-pack-transformer-v2 POST /tracks uploads the track JSON to this bucket (S3_BUCKET).
+  - namespace: bulk-pack-services
+    name: tracks-bucket
+    literals:
+      bucket: ${TRACKS_BUCKET}
 # Object storage this subsystem needs (provisioned idempotently on the shared LocalStack, all
 # in OBJECT_STORAGE_REGION, before this adapter's services start).
 objectStorage:
   buckets:
     - ${BATCH_UPLOADS_BUCKET}
     - ${IMAGES_BUCKET}
+    # transformer-v2 /tracks target. No notification: tracks must not re-enter the ingest queue.
+    - ${TRACKS_BUCKET}
   queues:
     - ${UPLOAD_QUEUE}
   notifications:
