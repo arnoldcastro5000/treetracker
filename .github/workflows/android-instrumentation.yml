@@ -9,6 +9,11 @@
 # ci/android-instrumentation branch. It never runs on every PR.
 name: Android Instrumentation Tests
 
+# Carry the mode + ref in the run-list title, so a volunteer reads what a run is WITHOUT
+# opening it. run-name may reference only the `github` and `inputs` contexts; on a push
+# `inputs.extensive` is empty, so the ternary falls through to "single pass".
+run-name: "Instrumentation: ${{ inputs.extensive && '50x flake-hunt' || 'single pass' }} @ ${{ github.ref_name }}"
+
 on:
   workflow_dispatch:
     inputs:
@@ -110,9 +115,20 @@ jobs:
             adb logcat -c || true
             bash .github/scripts/run-instrumentation-tests.sh
 
+      # Digest the JUnit XML into a pass/fail table on the run summary page, so a volunteer
+      # reads the outcome without opening any log. Runs on PASS and on FAIL (if: always());
+      # when no XML exists (build failed before tests ran) it writes a plain line, not an
+      # error. The FULL HTML report + XML stay in the artifact below (this is the digest
+      # only: the step summary has a 1 MiB / 20-per-job limit).
+      - name: Publish results summary
+        if: always()
+        env:
+          EXTENSIVE: ${{ github.event.inputs.extensive }}
+        run: bash .github/scripts/instrumentation-summary.sh
+
       # Always upload the evidence: the androidTest HTML report + JUnit XML + the device
       # logcat, screen recording, and (extensive only) the flake-hunt ledger.
-      - name: Upload test report
+      - name: Upload report, logcat, screen recording
         if: always()
         uses: actions/upload-artifact@v4
         with:

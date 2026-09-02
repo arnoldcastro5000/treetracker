@@ -35,21 +35,32 @@ if [ "${EXTENSIVE:-false}" = "true" ]; then
   echo "iteration,seconds,result" > "$LEDGER"
   for i in $(seq 1 50); do
     start=$(date +%s)
-    if ./gradlew connectedLocalAndroidTest --no-daemon; then
+    # --console=plain gives flat line-based gradle output; the ::group:: folds each
+    # iteration into one collapsed section so the log reads as a list, not a wall.
+    echo "::group::Gradle connectedLocalAndroidTest (iteration ${i}/50)"
+    if ./gradlew connectedLocalAndroidTest --no-daemon --console=plain; then
       result=pass
     else
       result=fail
       ec=1
     fi
+    echo "::endgroup::"
     end=$(date +%s)
     echo "${i},$((end - start)),${result}" >> "$LEDGER"
     if [ "$result" = "fail" ]; then
-      echo "::error::extensive run failed on iteration ${i}"
+      # ONE titled annotation, not one per assertion: it renders at the top of the run
+      # summary so a volunteer reads the cause first, above the log.
+      echo "::error title=Instrumentation flake-hunt failed::Iteration ${i}/50 failed. See the results table in the run summary and the instrumentation-report artifact."
       break
     fi
   done
 else
-  ./gradlew connectedLocalAndroidTest --no-daemon --stacktrace || ec=$?
+  echo "::group::Gradle connectedLocalAndroidTest"
+  ./gradlew connectedLocalAndroidTest --no-daemon --stacktrace --console=plain || ec=$?
+  echo "::endgroup::"
+  if [ "$ec" -ne 0 ]; then
+    echo "::error title=Instrumentation tests failed::One or more instrumentation tests failed. See the results table in the run summary and the instrumentation-report artifact."
+  fi
 fi
 
 # Give logcat a beat to flush, then tear the captures down and pull the recording.

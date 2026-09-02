@@ -200,8 +200,13 @@ Active scenarios: `02_signup_flow` (language → signup → dashboard) and `03_c
 
 ## Run in GitHub Actions
 
+[![Android Instrumentation Tests](https://github.com/arnoldcastro5000/treetracker/actions/workflows/android-instrumentation.yml/badge.svg?branch=ci/android-instrumentation)](https://github.com/arnoldcastro5000/treetracker/actions/workflows/android-instrumentation.yml)
+
 Two workflows run this suite in CI. Neither needs a local emulator; CI is the normal way to run
-the full pipeline.
+the full pipeline. A third workflow, **`android-instrumentation.yml`** (badge above), runs the
+sibling hermetic in-process Compose/JUnit suite in `treetracker-android` (no backend, no camera,
+no network); its run summary shows a pass/fail table and, on the opt-in 50x flake-hunt, the
+per-iteration ledger.
 
 **`android-e2e-route2.yml`** (Android E2E, Route 2, co-located) is the full run: it stands up the
 whole backend (k3d capture pipeline + LocalStack) and an accelerated emulator in one job, then
