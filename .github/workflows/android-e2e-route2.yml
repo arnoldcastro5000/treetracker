@@ -25,7 +25,7 @@ name: Android E2E (full-stack, co-located)
 # Carry the stage + ref in the run-list title, so a volunteer reads what a run is WITHOUT
 # opening it. It mirrors the Resolve-stage default (push -> stage 3). run-name may reference
 # only the `github` and `inputs` contexts.
-run-name: "E2E Route2 stage ${{ github.event.inputs.stage || '3' }} @ ${{ github.ref_name }}"
+run-name: "Full-stack E2E stage ${{ github.event.inputs.stage || '3' }} @ ${{ github.ref_name }}"
 
 on:
   workflow_dispatch:
