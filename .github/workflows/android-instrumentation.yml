@@ -1,0 +1,125 @@
+# Android instrumentation tests (issue #1243): boots ONLY an accelerated emulator and
+# runs the in-process Compose/JUnit suite in treetracker-android against the `.local`
+# build variant. It is SEPARATE from and strictly additive to the route2 E2E workflow:
+# it stands up NO backend (no k3d, no LocalStack, no pipeline images), because the tests
+# are hermetic (fake state, no network, no camera). See the tracker:
+# .scratch/volunteer-e2e-ci/issues/40 (test sources) + 41 (this workflow).
+#
+# Trigger: workflow_dispatch (with an opt-in 50x flake-hunt input) plus push on the
+# ci/android-instrumentation branch. It never runs on every PR.
+name: Android Instrumentation Tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      extensive:
+        description: "Run the 50x flake-hunt harness (bar: zero failures)"
+        type: boolean
+        default: false
+  push:
+    branches: [ci/android-instrumentation]
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+
+# One run per branch: a newer push cancels the in-flight run for the same ref.
+concurrency:
+  group: android-instrumentation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  instrumentation:
+    runs-on: ubuntu-latest
+    # A single hermetic pass (emulator boot + one .local build + connected test) is well
+    # under this; the opt-in 50x harness reuses the same booted device, so 90 covers it.
+    timeout-minutes: 90
+
+    steps:
+      # Only the android submodule is needed (no backend), so skip the other ~15 and init
+      # just this one. Its .gitmodules URL is the fork, so the pushed test commit resolves.
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Init android submodule
+        run: git submodule update --init treetracker-android
+
+      # Reclaim space from large preinstalled toolchains we never use (keep the Android
+      # SDK: the app build and the emulator need it).
+      - name: Free up disk space
+        run: |
+          echo "== disk before =="; df -h /
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup \
+            /opt/hostedtoolcache/CodeQL /usr/share/swift || true
+          echo "== disk after =="; df -h /
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Gradle cache
+        uses: gradle/actions/setup-gradle@v4
+
+      # The `.local` variant points its S3/API values at the emulator host alias and uses
+      # static local creds, so these placeholder keys only let Gradle configuration
+      # resolve. No real AWS/Cognito secret is needed (matches route2's dummy keys).
+      - name: Write dummy Android keys
+        run: |
+          cat > treetracker-android/treetracker.keys.properties <<'KEYS'
+          s3_production_identity_pool_id=placeholder
+          prod_treetracker_client_id=placeholder
+          prod_treetracker_client_secret=placeholder
+          s3_test_identity_pool_id=placeholder
+          test_treetracker_client_id=placeholder
+          test_treetracker_client_secret=placeholder
+          s3_dev_identity_pool_id=placeholder
+          dev_treetracker_client_id=placeholder
+          dev_treetracker_client_secret=placeholder
+          treetracker_client_id=placeholder
+          treetracker_client_secret=placeholder
+          KEYS
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      # Boot the emulator and run the suite. The recipe mirrors route2 (api 30 /
+      # google_apis / x86_64 / pixel_5, 4096M guest RAM, animations off, swiftshader).
+      # The whole run + log capture lives in one committed script (called on a single
+      # line) because this action aborts at the first non-zero script line.
+      - name: Run instrumentation tests
+        uses: reactivecircus/android-emulator-runner@v2
+        env:
+          EXTENSIVE: ${{ github.event.inputs.extensive }}
+        with:
+          api-level: 30
+          target: google_apis
+          arch: x86_64
+          profile: pixel_5
+          ram-size: 4096M
+          disable-animations: true
+          emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back emulated -camera-front emulated
+          script: |
+            adb wait-for-device
+            adb logcat -c || true
+            bash .github/scripts/run-instrumentation-tests.sh
+
+      # Always upload the evidence: the androidTest HTML report + JUnit XML + the device
+      # logcat, screen recording, and (extensive only) the flake-hunt ledger.
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: instrumentation-report
+          path: |
+            treetracker-android/app/build/reports/androidTests/**
+            treetracker-android/app/build/outputs/androidTest-results/**
+            instrumentation-artifacts/**
+          if-no-files-found: warn
+          retention-days: 14

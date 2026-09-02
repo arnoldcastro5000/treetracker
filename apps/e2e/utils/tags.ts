@@ -40,6 +40,9 @@ export const Tags = {
   // Dashboard counters (read to assert upload progress)
   UPLOADED_COUNT: "uploaded-count",
   REMAINING_COUNT: "ready-to-upload-count",
+
+  // Dashboard actions
+  DASHBOARD_SYNC: "dashboard-sync",
 } as const;
 
 /** Per-language selection row, e.g. languageOption("ENGLISH") -> "language-option-english". */
