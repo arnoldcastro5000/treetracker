@@ -22,6 +22,11 @@
 #   stage 3  full (default): real APK runs 03 end to end incl. the /verify assertion.
 name: Android E2E (Route 2, co-located)
 
+# Carry the stage + ref in the run-list title, so a volunteer reads what a run is WITHOUT
+# opening it. It mirrors the Resolve-stage default (push -> stage 3). run-name may reference
+# only the `github` and `inputs` contexts.
+run-name: "E2E Route2 stage ${{ github.event.inputs.stage || '3' }} @ ${{ github.ref_name }}"
+
 on:
   workflow_dispatch:
     inputs:
@@ -142,13 +147,19 @@ jobs:
       # Submodules stay PINNED by prepare-linux's default (the checkout above already put
       # every submodule on its superproject commit; the pinned path is a no-op here).
       - name: Install cluster tools
-        run: ./k3s/prepare-linux.sh
+        run: |
+          echo "::group::prepare-linux.sh"
+          ./k3s/prepare-linux.sh
+          echo "::endgroup::"
 
       # Stand up the full capture subsystem (postgres + gateway + LocalStack + the
       # capture/verify pipeline + admin) against a fresh k3d cluster, then seed the
       # admin row (seed-admin uses ADMIN_USER/ADMIN_PASSWORD from the job env).
       - name: Stand up local stack (up.sh capture)
-        run: ./k3s/up.sh capture
+        run: |
+          echo "::group::up.sh capture"
+          ./k3s/up.sh capture
+          echo "::endgroup::"
 
       - name: Verify stack (smoke gate)
         run: ./k3s/up.sh verify capture
@@ -159,7 +170,10 @@ jobs:
       # gateway. It reads the capture stack's treetracker DB (trees) + images-api, so it
       # MUST come after the capture standup above.
       - name: Stand up web-map spine (up.sh web-map)
-        run: ./k3s/up.sh web-map
+        run: |
+          echo "::group::up.sh web-map"
+          ./k3s/up.sh web-map
+          echo "::endgroup::"
 
       # Definition-of-done for the thin spine: client HTML at /map/, query-api JSON on
       # /query/ AND the /webmap/ compat prefix, a z16 tile PNG over the Buwagi capture
@@ -206,7 +220,10 @@ jobs:
 
       - name: Build local APK
         working-directory: treetracker-android
-        run: ./gradlew :app:assembleLocal --no-daemon --stacktrace
+        run: |
+          echo "::group::gradlew :app:assembleLocal"
+          ./gradlew :app:assembleLocal --no-daemon --stacktrace --console=plain
+          echo "::endgroup::"
 
       - name: Install e2e dependencies
         working-directory: apps/e2e
@@ -290,6 +307,32 @@ jobs:
             exit 1
           fi
           echo "real-app upload landed: raw_capture grew ${RAW_CAPTURE_BASELINE} -> ${NOW}"
+
+      # Top-of-summary verdict: the stage + a PASS/FAIL headline + the spec that ran, at
+      # the TOP of the run summary page. The summary renders in write order, so this step
+      # runs BEFORE the Capture Journey / component / resource blocks below, giving a
+      # volunteer the outcome first. job.status reflects every step that ran before this one
+      # (the standup, the E2E, and the stage assertions), so it is the real verdict. On a
+      # failure it also emits ONE titled annotation pointing at the evidence.
+      - name: E2E verdict summary
+        if: always()
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          case "$JOB_STATUS" in
+            success)   VERDICT=":white_check_mark: PASSED" ;;
+            cancelled) VERDICT=":grey_exclamation: CANCELLED" ;;
+            *)         VERDICT=":x: FAILED"
+                       echo "::error title=Route2 E2E failed (stage ${STAGE:-?})::The run did not pass. See the Capture Journey report in the run summary (it names the hop where capture stopped) and the e2e-route2-evidence-stage${STAGE:-?} artifact." ;;
+          esac
+          {
+            echo "## E2E Route2 stage ${STAGE:-?}: ${VERDICT}"
+            echo
+            echo "Spec: \`${E2E_SPEC:-?}\`"
+            echo
+            echo "Evidence: the \`e2e-route2-evidence-stage${STAGE:-?}\` artifact (video, screenshots, logcat, reports). The Capture Journey report, component status, and resource utilization follow below."
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
 
       # Always-on Capture Journey report: joins the scattered per-hop signals of the run
       # (cucumber steps, logcat Timber lines, the pipeline DB tables keyed by the note
