@@ -14,6 +14,9 @@ panel URL are all read from env (`APK_PATH`, `APP_PACKAGE`, `ADMIN_URL`).
 > build (real-AWS `treetracker-local-*` env + local k3s); see the AWS `local` environment and
 > Android `local` build sections in `k3s/README.md`.
 
+> **New here?** Start with the task guide [Run the full-stack Android E2E tests](docs/running-full-stack-e2e-tests.md).
+> It gives the shortest path to a first run, local and in CI. This README is the full reference.
+
 ---
 
 ## Prerequisites (one-time)

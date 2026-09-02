@@ -119,6 +119,19 @@ These are planned but not wired up yet. They do not stand up today.
 - `webmap-query-service-consumer` (not yet a submodule): an enrichment step for the web map. It is
   planned as an opt-in add-on to the web-map subsystem.
 
+## Testing
+
+Two test suites cover the Android capture app and its pipeline. Each one has a task guide:
+
+- [Run the full-stack Android E2E tests](apps/e2e/docs/running-full-stack-e2e-tests.md): the real
+  `local` APK on an emulator, driven through the app against the whole local backend (capture,
+  upload, pipeline, admin verify).
+- [Run the Compose UI tests (Android app)](treetracker-android/docs/testing/running-compose-ui-tests.md):
+  the in-process, hermetic Compose UI tests of the app screens. This link points into the
+  `treetracker-android` submodule, so it resolves only after the submodule is checked out. The
+  Quickstart clone with `--recurse-submodules` populates it. If the link returns a 404, run
+  `git submodule update --init` first.
+
 ## More documentation
 
 - Volunteers: [`k3s/README.md`](k3s/README.md) describes how the local environment works.
