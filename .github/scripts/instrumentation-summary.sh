@@ -71,13 +71,15 @@ fi
 } >> "$SUMMARY"
 
 # Per-class breakdown so a volunteer sees WHICH class failed, still without the log.
+# The connected suite writes ONE device-level <testsuite> whose <testcase> children carry
+# the real class in `classname`, so aggregate by classname (NOT the testsuite name). A
+# testcase is a failure/error/skip when it holds that child element (same line or a later
+# line for a multi-line case); otherwise it passed.
 {
   echo "<details><summary>Per test class</summary>"
   echo
   echo "| Test class | Tests | Failed | Errors | Skipped |"
   echo "| --- | ---: | ---: | ---: | ---: |"
-} >> "$SUMMARY"
-for f in "${xmls[@]}"; do
   awk '
     function attr(line, name,   re, v) {
       re = name "=\"[^\"]*\""
@@ -88,12 +90,24 @@ for f in "${xmls[@]}"; do
       }
       return ""
     }
-    /<testsuite / {
-      printf "| %s | %s | %s | %s | %s |\n", attr($0,"name"), attr($0,"tests"), attr($0,"failures"), attr($0,"errors"), attr($0,"skipped")
+    /<testcase/ {
+      cls = attr($0, "classname")
+      total[cls]++
+      if      ($0 ~ /<failure/) fail[cls]++
+      else if ($0 ~ /<error/)   err[cls]++
+      else if ($0 ~ /<skipped/) skip[cls]++
+      else if ($0 !~ /\/>/)   { cur = cls; open = 1 }
+      next
     }
-  ' "$f" >> "$SUMMARY"
-done
-{
+    open && /<failure/     { fail[cur]++; open = 0; next }
+    open && /<error/       { err[cur]++;  open = 0; next }
+    open && /<skipped/     { skip[cur]++; open = 0; next }
+    open && /<\/testcase>/ { open = 0; next }
+    END {
+      for (c in total)
+        printf "| %s | %d | %d | %d | %d |\n", c, total[c], fail[c], err[c], skip[c]
+    }
+  ' "${xmls[@]}" | sort
   echo
   echo "</details>"
   echo
