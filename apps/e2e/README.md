@@ -201,15 +201,15 @@ Active scenarios: `02_signup_flow` (language → signup → dashboard) and `03_c
 ## Run in GitHub Actions
 
 [![Android Instrumentation Tests](https://github.com/arnoldcastro5000/treetracker/actions/workflows/android-instrumentation.yml/badge.svg?branch=ci/android-instrumentation)](https://github.com/arnoldcastro5000/treetracker/actions/workflows/android-instrumentation.yml)
-[![Android E2E Route 2](https://github.com/arnoldcastro5000/treetracker/actions/workflows/android-e2e-route2.yml/badge.svg?branch=ci/android-instrumentation)](https://github.com/arnoldcastro5000/treetracker/actions/workflows/android-e2e-route2.yml)
+[![Android E2E (full-stack)](https://github.com/arnoldcastro5000/treetracker/actions/workflows/android-e2e-route2.yml/badge.svg?branch=ci/android-instrumentation)](https://github.com/arnoldcastro5000/treetracker/actions/workflows/android-e2e-route2.yml)
 
 Two workflows run this suite in CI. Neither needs a local emulator; CI is the normal way to run
 the full pipeline. A third workflow, **`android-instrumentation.yml`** (badge above), runs the
-sibling hermetic in-process Compose/JUnit suite in `treetracker-android` (no backend, no camera,
-no network); its run summary shows a pass/fail table and, on the opt-in 50x flake-hunt, the
-per-iteration ledger.
+sibling Compose UI test suite in `treetracker-android` (instrumented, in-process, hermetic: no
+backend, no camera, no network); its run summary shows a pass/fail table and, on the opt-in 50x
+flake-hunt, the per-iteration ledger.
 
-**`android-e2e-route2.yml`** (Android E2E, Route 2, co-located) is the full run: it stands up the
+**`android-e2e-route2.yml`** (Android E2E, full-stack, co-located; legacy alias "Route 2") is the full run: it stands up the
 whole backend (k3d capture pipeline + LocalStack) and an accelerated emulator in one job, then
 drives the real `local` APK through capture → upload → admin `/verify`. A full run takes roughly
 25 minutes. Two triggers:
@@ -222,8 +222,7 @@ drives the real `local` APK through capture → upload → admin `/verify`. A fu
   gh run watch <run-id>
   gh run download <run-id>      # evidence artifact: video, screenshots, logcat, reports
   ```
-- A push to any branch whose name contains `route2-e2e` starts the full run automatically (a
-  docs-only push is skipped). Pick a branch name without that pattern when you do not want CI.
+- A push to any branch starts the full run automatically (a docs-only push is skipped).
 
 The run summary starts with the Capture Journey report: a table that traces the capture from the
 Android UI through the backend pipeline to `/verify` and names the hop where a failed run stopped.

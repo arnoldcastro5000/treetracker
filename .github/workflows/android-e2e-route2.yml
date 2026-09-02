@@ -1,4 +1,4 @@
-# Co-located Route 2 Android E2E: stands up the WHOLE local backend (k3d capture
+# Co-located full-stack Android E2E (legacy alias: Route 2): stands up the WHOLE local backend (k3d capture
 # pipeline + host-side LocalStack + admin /verify) and an accelerated Android
 # emulator in ONE ubuntu-latest job, then drives the real `.local` APK through the
 # full capture -> upload -> pipeline -> admin /verify loop against that local stack.
@@ -20,7 +20,7 @@
 #                          assertion is skipped; the upload is asserted to LAND in
 #                          field_data.raw_capture.
 #   stage 3  full (default): real APK runs 03 end to end incl. the /verify assertion.
-name: Android E2E (Route 2, co-located)
+name: Android E2E (full-stack, co-located)
 
 # Carry the stage + ref in the run-list title, so a volunteer reads what a run is WITHOUT
 # opening it. It mirrors the Resolve-stage default (push -> stage 3). run-name may reference
@@ -109,7 +109,7 @@ jobs:
 
       # Single source of truth for the local admin creds: the orchestrator defaults.
       # seed-admin (inside up.sh) seeds THIS row and the e2e verify step logs in with
-      # the SAME values. No secrets: Route 2 uses static local dummy creds. Deriving
+      # the SAME values. No secrets: the full-stack E2E uses static local dummy creds. Deriving
       # them here (masked) avoids duplicating the literal in the committed workflow.
       - name: Resolve admin creds from orchestrator defaults
         run: |
@@ -201,7 +201,7 @@ jobs:
 
       # 02 is offline and the local build's S3/API values point at the emulator host
       # alias, so these placeholder Android keys only let Gradle configuration resolve.
-      # Route 2 needs no real Cognito/AWS secrets (static creds live in the local variant).
+      # The full-stack E2E needs no real Cognito/AWS secrets (static creds live in the local variant).
       - name: Write dummy Android keys
         run: |
           cat > treetracker-android/treetracker.keys.properties <<'KEYS'

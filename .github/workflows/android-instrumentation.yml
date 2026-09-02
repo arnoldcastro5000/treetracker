@@ -1,6 +1,7 @@
 # Android instrumentation tests (issue #1243): boots ONLY an accelerated emulator and
 # runs the in-process Compose/JUnit suite in treetracker-android against the `.local`
-# build variant. It is SEPARATE from and strictly additive to the route2 E2E workflow:
+# build variant. It is SEPARATE from and strictly additive to the full-stack E2E workflow
+# (android-e2e-route2.yml):
 # it stands up NO backend (no k3d, no LocalStack, no pipeline images), because the tests
 # are hermetic (fake state, no network, no camera). See the tracker:
 # .scratch/volunteer-e2e-ci/issues/40 (test sources) + 41 (this workflow).
@@ -70,7 +71,7 @@ jobs:
 
       # The `.local` variant points its S3/API values at the emulator host alias and uses
       # static local creds, so these placeholder keys only let Gradle configuration
-      # resolve. No real AWS/Cognito secret is needed (matches route2's dummy keys).
+      # resolve. No real AWS/Cognito secret is needed (matches the full-stack E2E's dummy keys).
       - name: Write dummy Android keys
         run: |
           cat > treetracker-android/treetracker.keys.properties <<'KEYS'
@@ -94,7 +95,7 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      # Boot the emulator and run the suite. The recipe mirrors route2 (api 30 /
+      # Boot the emulator and run the suite. The recipe mirrors the full-stack E2E (api 30 /
       # google_apis / x86_64 / pixel_5, 4096M guest RAM, animations off, swiftshader).
       # The whole run + log capture lives in one committed script (called on a single
       # line) because this action aborts at the first non-zero script line.
