@@ -222,7 +222,7 @@ jobs:
         working-directory: treetracker-android
         run: |
           echo "::group::gradlew :app:assembleLocal"
-          ./gradlew :app:assembleLocal --no-daemon --stacktrace --console=plain
+          ./gradlew :app:assembleLocal --no-daemon --stacktrace
           echo "::endgroup::"
 
       - name: Install e2e dependencies

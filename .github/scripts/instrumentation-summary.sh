@@ -14,9 +14,12 @@
 #   EXTENSIVE            "true" -> also render the 50x flake-hunt ledger
 set -u
 
+# Anchor at the workspace root (the run script writes the ledger under the same root), so
+# the digest does not depend on the step's current directory.
+WS="${GITHUB_WORKSPACE:-.}"
 SUMMARY="${GITHUB_STEP_SUMMARY:-/dev/stdout}"
-XML_DIR="treetracker-android/app/build/outputs/androidTest-results"
-LEDGER="instrumentation-artifacts/extensive-ledger.csv"
+XML_DIR="${WS}/treetracker-android/app/build/outputs/androidTest-results"
+LEDGER="${WS}/instrumentation-artifacts/extensive-ledger.csv"
 
 # Android writes one TEST-<class>.xml per test class. Collect them all, sorted.
 mapfile -t xmls < <(find "$XML_DIR" -name '*.xml' 2>/dev/null | sort)

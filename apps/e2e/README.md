@@ -201,7 +201,7 @@ Active scenarios: `02_signup_flow` (language → signup → dashboard) and `03_c
 ## Run in GitHub Actions
 
 [![Android Instrumentation Tests](https://github.com/arnoldcastro5000/treetracker/actions/workflows/android-instrumentation.yml/badge.svg?branch=ci/android-instrumentation)](https://github.com/arnoldcastro5000/treetracker/actions/workflows/android-instrumentation.yml)
-[![Android E2E Route 2](https://github.com/arnoldcastro5000/treetracker/actions/workflows/android-e2e-route2.yml/badge.svg)](https://github.com/arnoldcastro5000/treetracker/actions/workflows/android-e2e-route2.yml)
+[![Android E2E Route 2](https://github.com/arnoldcastro5000/treetracker/actions/workflows/android-e2e-route2.yml/badge.svg?branch=ci/android-instrumentation)](https://github.com/arnoldcastro5000/treetracker/actions/workflows/android-e2e-route2.yml)
 
 Two workflows run this suite in CI. Neither needs a local emulator; CI is the normal way to run
 the full pipeline. A third workflow, **`android-instrumentation.yml`** (badge above), runs the

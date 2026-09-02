@@ -101,7 +101,7 @@ jobs:
       - name: Run instrumentation tests
         uses: reactivecircus/android-emulator-runner@v2
         env:
-          EXTENSIVE: ${{ github.event.inputs.extensive }}
+          EXTENSIVE: ${{ inputs.extensive }}
         with:
           api-level: 30
           target: google_apis
@@ -123,7 +123,7 @@ jobs:
       - name: Publish results summary
         if: always()
         env:
-          EXTENSIVE: ${{ github.event.inputs.extensive }}
+          EXTENSIVE: ${{ inputs.extensive }}
         run: bash .github/scripts/instrumentation-summary.sh
 
       # Always upload the evidence: the androidTest HTML report + JUnit XML + the device
