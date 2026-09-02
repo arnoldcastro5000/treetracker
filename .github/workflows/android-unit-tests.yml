@@ -1,0 +1,90 @@
+# Android JVM unit tests (Robolectric + JUnit) for treetracker-android. These run on the JVM
+# only: NO emulator, NO backend, NO KVM. They are the fast MEDIUM tier under the full-stack E2E
+# (android-e2e-route2.yml) and the on-device Compose tests (android-instrumentation.yml).
+#
+# Until this workflow the module's ~68 unit tests never ran in CI. This job runs the whole
+# suite against the `local` build variant (matching testBuildType "local"), so FeatureFlags
+# reads BUILD_TYPE == "local" exactly as the app ships to the volunteer test flows. The sync
+# ENQUEUE guard added for issue #1243 (DashboardViewModelTest, WorkManagerTestInitHelper) lives
+# here. See the tracker: .scratch/volunteer-e2e-ci/issues/45.
+#
+# Trigger: workflow_dispatch plus push on the ci/android-instrumentation branch. Never every PR.
+name: Android Unit Tests
+
+# Carry the ref in the run-list title, so a volunteer reads what a run is WITHOUT opening it.
+run-name: "Unit tests @ ${{ github.ref_name }}"
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ci/android-instrumentation]
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+
+# One run per branch: a newer push cancels the in-flight run for the same ref.
+concurrency:
+  group: android-unit-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      # Only the android submodule is needed (no backend), so skip the other ~15 and init
+      # just this one. Its .gitmodules URL is the fork, so the pushed test commit resolves.
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Init android submodule
+        run: git submodule update --init treetracker-android
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Gradle cache
+        uses: gradle/actions/setup-gradle@v4
+
+      # The `.local` variant points its S3/API values at placeholders for unit tests; these
+      # keys only let Gradle configuration resolve. No real AWS/Cognito secret is needed
+      # (matches android-instrumentation.yml and the full-stack E2E's dummy keys).
+      - name: Write dummy Android keys
+        run: |
+          cat > treetracker-android/treetracker.keys.properties <<'KEYS'
+          s3_production_identity_pool_id=placeholder
+          prod_treetracker_client_id=placeholder
+          prod_treetracker_client_secret=placeholder
+          s3_test_identity_pool_id=placeholder
+          test_treetracker_client_id=placeholder
+          test_treetracker_client_secret=placeholder
+          s3_dev_identity_pool_id=placeholder
+          dev_treetracker_client_id=placeholder
+          dev_treetracker_client_secret=placeholder
+          treetracker_client_id=placeholder
+          treetracker_client_secret=placeholder
+          KEYS
+
+      # Run the `local` variant unit tests (matches testBuildType "local"). Screenshot
+      # (Roborazzi) tests are excluded by the module's own Test task filter.
+      - name: Run unit tests
+        working-directory: treetracker-android
+        run: ./gradlew testLocalUnitTest --console=plain
+
+      # Always upload the HTML + XML report so a volunteer reads a failure without the raw log.
+      - name: Upload unit-test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-report
+          path: |
+            treetracker-android/app/build/reports/tests/**
+            treetracker-android/app/build/test-results/**
+          if-no-files-found: warn
+          retention-days: 14
