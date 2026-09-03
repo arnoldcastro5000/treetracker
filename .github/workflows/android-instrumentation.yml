@@ -10,10 +10,11 @@
 # branch. A docs-only push is skipped.
 name: Android Instrumentation Tests
 
-# Carry the mode + ref in the run-list title, so a volunteer reads what a run is WITHOUT
-# opening it. run-name may reference only the `github` and `inputs` contexts; on a push
-# `inputs.extensive` is empty, so the ternary falls through to "single pass".
-run-name: "Instrumentation: ${{ inputs.extensive && '50x flake-hunt' || 'single pass' }} @ ${{ github.ref_name }}"
+# Carry the ref (and the flake-hunt mode when on) in the run-list title, so a volunteer
+# reads what a run is WITHOUT opening it. run-name may reference only the `github` and
+# `inputs` contexts; on a push `inputs.extensive` is empty, so the suffix drops and the
+# title is just "Instrumentation @ <ref>". Only the opt-in 50x run adds a mode label.
+run-name: "Instrumentation${{ inputs.extensive && ': 50x flake-hunt' || '' }} @ ${{ github.ref_name }}"
 
 on:
   workflow_dispatch:
