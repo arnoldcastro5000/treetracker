@@ -1,0 +1,10 @@
+# Allowlist for the docs-consistency check (.github/scripts/check-docs-consistency.sh).
+#
+# One name per line. A listed submodule or adapter subsystem is SKIPPED in every docs check,
+# so the build does not fail while it is intentionally undocumented (a temporary or
+# experimental addition). Remove the name once the docs catch up.
+#
+# `#` comments and blank lines are ignored. Example:
+#   experimental-service    # remove after the coverage doc lists it
+#
+# (empty: every submodule and adapter is documented today)

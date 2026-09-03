@@ -1,0 +1,49 @@
+# Docs consistency check (issue: "Keep the docs current"). It fails a change when a git
+# submodule or a k3s stand-up adapter is not documented in README.md's Submodules section or
+# docs/component-coverage.md. It judges SET MEMBERSHIP, not prose, so it is deterministic and
+# high-signal. The whole check is one committed script; verify it locally with
+# .github/scripts/check-docs-consistency.test.sh. Design + research backing:
+# .scratch/estate-coverage/research/ci-docs-currency-best-practice.md.
+name: Docs Consistency
+
+run-name: "Docs consistency @ ${{ github.ref_name }}"
+
+# Narrow triggers keep the check high-signal: it runs ONLY when a source-of-truth fact or a
+# doc it checks changes. It deliberately does NOT use a docs-only paths-ignore, so a
+# `.gitmodules` or adapter change that forgets the docs still fires the gate.
+on:
+  workflow_dispatch:
+  # Both push and pull_request, sharing one path filter (a YAML anchor). pull_request lets the
+  # job serve as a required branch-protection status check that blocks an undocumented change
+  # from merging; push covers this repo's direct-to-branch flow.
+  push:
+    paths: &doc_paths
+      - ".gitmodules"
+      - "k3s/services/**"
+      - "README.md"
+      - "docs/component-coverage.md"
+      - ".github/scripts/check-docs-consistency.sh"
+      - ".github/docs-consistency-allow.txt"
+      - ".github/workflows/docs-consistency.yml"
+  pull_request:
+    paths: *doc_paths
+
+concurrency:
+  group: docs-consistency-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      # The check reads only main-repo files (.gitmodules, k3s/services, README, coverage doc),
+      # so the submodule contents are not needed. Skip them for a fast checkout.
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Check docs consistency
+        run: bash .github/scripts/check-docs-consistency.sh
