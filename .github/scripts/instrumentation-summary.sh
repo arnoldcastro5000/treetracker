@@ -73,13 +73,14 @@ fi
   echo
 } >> "$SUMMARY"
 
-# Per-class breakdown so a volunteer sees WHICH class failed, still without the log.
+# Per-class breakdown so a volunteer sees WHICH class failed, still without the log. It is
+# rendered ALWAYS EXPANDED (no <details> fold), so the full class list is visible at a glance.
 # The connected suite writes ONE device-level <testsuite> whose <testcase> children carry
 # the real class in `classname`, so aggregate by classname (NOT the testsuite name). A
 # testcase is a failure/error/skip when it holds that child element (same line or a later
 # line for a multi-line case); otherwise it passed.
 {
-  echo "<details><summary>Per test class</summary>"
+  echo "### Per test class"
   echo
   echo "| Test class | Tests | Failed | Errors | Skipped |"
   echo "| --- | ---: | ---: | ---: | ---: |"
@@ -112,9 +113,25 @@ fi
     }
   ' "${xmls[@]}" | sort
   echo
-  echo "</details>"
-  echo
 } >> "$SUMMARY"
+
+# Link the source of truth: the instrumentation tests are defined in the treetracker-android
+# submodule (app/src/androidTest), which the monorepo pins by gitlink and runs via
+# `connectedLocalAndroidTest`. Link that test source AT THE PINNED COMMIT, so a reader sees which
+# tests exist and how many run. The URL comes from the .gitmodules submodule URL (the fork),
+# because the pinned commit is reachable there (the submodule's own origin may point at upstream,
+# where the fork-only commit does not exist).
+sm_dir="${WS}/treetracker-android"
+sm_sha="$(git -C "$sm_dir" rev-parse HEAD 2>/dev/null || true)"
+sm_url="$(git config -f "${WS}/.gitmodules" submodule.treetracker-android.url 2>/dev/null || true)"
+if [ -n "$sm_sha" ] && [ -n "$sm_url" ]; then
+  base="${sm_url%.git}"
+  base="${base/git@github.com:/https://github.com/}"
+  {
+    echo "**Test source:** these tests are defined in the \`treetracker-android\` submodule at the pinned commit \`${sm_sha:0:12}\`: [\`app/src/androidTest\`](${base}/tree/${sm_sha}/app/src/androidTest). The monorepo pins this commit and runs \`connectedLocalAndroidTest\`; that source dictates which tests exist and how many run."
+    echo
+  } >> "$SUMMARY"
+fi
 
 # On the 50x flake-hunt, render the per-iteration ledger + a one-line verdict.
 if [ "${EXTENSIVE:-false}" = "true" ] && [ -f "$LEDGER" ]; then
