@@ -54,6 +54,21 @@ provision object storage -> `pre` -> build/pull images -> apply `overlay` -> `up
 `post`; then, after every selected adapter is up, each `verify`. Contract tests:
 `k3s/orchestrator-test.sh`.
 
+## Documentation: definition of done
+
+Adding or removing a git submodule (`.gitmodules`) or an adapter (a `standalone.yaml` folder here) is
+not done until the docs describe it, IN THE SAME CHANGE. Update both:
+
+- the [`## Submodules`](../../README.md#submodules) section of the root README, and
+- [`docs/component-coverage.md`](../../docs/component-coverage.md) (the submodule-to-coverage mapping).
+
+The `Docs Consistency` CI check (`.github/scripts/check-docs-consistency.sh`) enforces this: it fails
+the build and names any submodule or adapter that the docs do not mention. If an omission is
+intentional and temporary (an experimental adapter not documented yet), add the name to
+`.github/docs-consistency-allow.txt`, or set `DOCS_CHECK_WARN_ONLY=1` to downgrade the failure to a
+warning. Prose drift beyond this structural set is caught by the monthly docs-refresh sweep (see the
+Maintenance section of `docs/component-coverage.md`).
+
 ## Vendored overlays
 
 The overlay files are vendored into the superproject rather than pulled from each

@@ -125,6 +125,25 @@ Everything counted as "not yet integrated" or "out of scope" is **not a submodul
 submodule that already exists but is not on `main` is `treetracker-airflow-dags` (on the
 `wt-integrate` branch), which the README lists under "Considered for integration".
 
+## Maintenance
+
+This page has two halves with different currency rules.
+
+- **The submodule mapping is repo-authoritative.** The set of submodules and stand-up adapters is
+  recomputable from `.gitmodules` and `k3s/services/*/standalone.yaml`. It is enforced: the `Docs
+  Consistency` CI check fails a change when a submodule or adapter is not documented here or in the
+  README, so this half stays current on the SAME change that adds or removes one (a definition of
+  done; see [`k3s/services/README.md`](../k3s/services/README.md)).
+- **The wider estate view is a dated snapshot.** The "55 components" figures and the covered /
+  wired / not-integrated / out-of-scope counts are a point-in-time snapshot (baseline 2026-08-25).
+  They need the full estate matrix re-run, which no volunteer can do from the repo alone, so they are
+  NOT recomputed on every change. Keep the baseline figure, and record any drift as a dated update
+  note (as with the 2026-08-27 note above) rather than editing the baseline in place.
+
+**Cadence.** Structural facts: event-driven, on the change itself (enforced by CI). Estate snapshot
+and prose: a monthly backstop sweep refreshes drift and the dated-snapshot delta, and proposes the
+edits on a review branch (it never lands on its own).
+
 ---
 
 _Source: the estate-coverage assessment (`.scratch/estate-coverage`), validated by a live
