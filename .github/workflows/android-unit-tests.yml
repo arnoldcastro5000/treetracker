@@ -79,6 +79,14 @@ jobs:
         working-directory: treetracker-android
         run: ./gradlew testLocalUnitTest --console=plain
 
+      # Digest the JUnit XML into a pass/fail table on the run summary page, so a volunteer
+      # reads the outcome without opening the gradle log. Runs on PASS and on FAIL
+      # (if: always()); when no XML exists (build failed before tests ran) it writes a plain
+      # line, not an error. The FULL HTML report + XML stay in the artifact below.
+      - name: Publish results summary
+        if: always()
+        run: bash .github/scripts/unit-tests-summary.sh
+
       # Always upload the HTML + XML report so a volunteer reads a failure without the raw log.
       - name: Upload unit-test report
         if: always()
