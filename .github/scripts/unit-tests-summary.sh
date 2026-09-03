@@ -76,11 +76,12 @@ fi
   echo
 } >> "$SUMMARY"
 
-# Per-class breakdown so a volunteer sees WHICH class failed, still without the log. Each
-# file is one <testsuite> whose `name` is the class FQN; strip the app's common root
+# Per-class breakdown so a volunteer sees WHICH class failed, still without the log. It is
+# rendered ALWAYS EXPANDED (no <details> fold), so the full class list is visible at a glance.
+# Each file is one <testsuite> whose `name` is the class FQN; strip the app's common root
 # package so the table stays readable (a class outside it prints unchanged).
 {
-  echo "<details><summary>Per test class</summary>"
+  echo "### Per test class"
   echo
   echo "| Test class | Tests | Failed | Errors | Skipped | Time (s) |"
   echo "| --- | ---: | ---: | ---: | ---: | ---: |"
@@ -103,9 +104,24 @@ fi
     }
   ' "${xmls[@]}" | sort
   echo
-  echo "</details>"
-  echo
 } >> "$SUMMARY"
+
+# Link the source of truth: the tests are defined in the treetracker-android submodule, which
+# the monorepo pins by gitlink and runs via `testLocalUnitTest`. Link that test source AT THE
+# PINNED COMMIT, so a reader sees exactly which tests exist and how many run. The URL comes from
+# the .gitmodules submodule URL (the fork), because the pinned commit is reachable there (the
+# submodule's own origin may point at upstream, where the fork-only commit does not exist).
+sm_dir="$WS/treetracker-android"
+sm_sha="$(git -C "$sm_dir" rev-parse HEAD 2>/dev/null || true)"
+sm_url="$(git config -f "$WS/.gitmodules" submodule.treetracker-android.url 2>/dev/null || true)"
+if [ -n "$sm_sha" ] && [ -n "$sm_url" ]; then
+  base="${sm_url%.git}"
+  base="${base/git@github.com:/https://github.com/}"
+  {
+    echo "**Test source:** these tests are defined in the \`treetracker-android\` submodule at the pinned commit \`${sm_sha:0:12}\`: [\`app/src/test\`](${base}/tree/${sm_sha}/app/src/test). The monorepo pins this commit and runs \`testLocalUnitTest\`; that source dictates which tests exist and how many run."
+    echo
+  } >> "$SUMMARY"
+fi
 
 # On failure emit ONE titled annotation so the cause sits at the top of the run summary.
 if [ "$bad" -ne 0 ]; then
