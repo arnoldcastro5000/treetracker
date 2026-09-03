@@ -8,7 +8,7 @@
 # ENQUEUE guard added for issue #1243 (DashboardViewModelTest, WorkManagerTestInitHelper) lives
 # here. See the tracker: .scratch/volunteer-e2e-ci/issues/45.
 #
-# Trigger: workflow_dispatch plus push on the ci/android-instrumentation branch. Never every PR.
+# Trigger: workflow_dispatch plus push on any branch. A docs-only push is skipped.
 name: Android Unit Tests
 
 # Carry the ref in the run-list title, so a volunteer reads what a run is WITHOUT opening it.
@@ -17,7 +17,9 @@ run-name: "Unit tests @ ${{ github.ref_name }}"
 on:
   workflow_dispatch:
   push:
-    branches: [ci/android-instrumentation]
+    # Runs on EVERY code or configuration change, on any branch. A docs-only push is
+    # skipped: when ALL changed files match these patterns the run does not start; a push
+    # that mixes docs with any code/config change still runs.
     paths-ignore:
       - "**/*.md"
       - "docs/**"

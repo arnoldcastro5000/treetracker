@@ -6,8 +6,8 @@
 # are hermetic (fake state, no network, no camera). See the tracker:
 # .scratch/volunteer-e2e-ci/issues/40 (test sources) + 41 (this workflow).
 #
-# Trigger: workflow_dispatch (with an opt-in 50x flake-hunt input) plus push on the
-# ci/android-instrumentation branch. It never runs on every PR.
+# Trigger: workflow_dispatch (with an opt-in 50x flake-hunt input) plus push on any
+# branch. A docs-only push is skipped.
 name: Android Instrumentation Tests
 
 # Carry the mode + ref in the run-list title, so a volunteer reads what a run is WITHOUT
@@ -23,7 +23,9 @@ on:
         type: boolean
         default: false
   push:
-    branches: [ci/android-instrumentation]
+    # Runs on EVERY code or configuration change, on any branch. A docs-only push is
+    # skipped: when ALL changed files match these patterns the run does not start; a push
+    # that mixes docs with any code/config change still runs.
     paths-ignore:
       - "**/*.md"
       - "docs/**"
