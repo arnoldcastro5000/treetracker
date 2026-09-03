@@ -203,14 +203,17 @@ Active scenarios: `02_signup_flow` (language → signup → dashboard) and `03_c
 
 ## Run in GitHub Actions
 
+[![Android Unit Tests](https://github.com/arnoldcastro5000/treetracker/actions/workflows/android-unit-tests.yml/badge.svg?branch=ci/android-instrumentation)](https://github.com/arnoldcastro5000/treetracker/actions/workflows/android-unit-tests.yml)
 [![Android Instrumentation Tests](https://github.com/arnoldcastro5000/treetracker/actions/workflows/android-instrumentation.yml/badge.svg?branch=ci/android-instrumentation)](https://github.com/arnoldcastro5000/treetracker/actions/workflows/android-instrumentation.yml)
 [![Android E2E (full-stack)](https://github.com/arnoldcastro5000/treetracker/actions/workflows/android-e2e-route2.yml/badge.svg?branch=ci/android-instrumentation)](https://github.com/arnoldcastro5000/treetracker/actions/workflows/android-e2e-route2.yml)
 
 Two workflows run this suite in CI. Neither needs a local emulator; CI is the normal way to run
-the full pipeline. A third workflow, **`android-instrumentation.yml`** (badge above), runs the
-sibling Compose UI test suite in `treetracker-android` (instrumented, in-process, hermetic: no
-backend, no camera, no network); its run summary shows a pass/fail table and, on the opt-in 50x
-flake-hunt, the per-iteration ledger.
+the full pipeline. Two more workflows cover the sibling test tiers in `treetracker-android`:
+**`android-unit-tests.yml`** (badge above) runs the JVM unit suite (Robolectric + JUnit, no
+emulator); its run summary shows a pass/fail table and a per-class breakdown.
+**`android-instrumentation.yml`** (badge above) runs the Compose UI test suite (instrumented,
+in-process, hermetic: no backend, no camera, no network); its run summary shows a pass/fail table
+and, on the opt-in 50x flake-hunt, the per-iteration ledger.
 
 **`android-e2e-route2.yml`** (Android E2E, full-stack, co-located; legacy alias "Route 2") is the full run: it stands up the
 whole backend (k3d capture pipeline + LocalStack) and an accelerated emulator in one job, then
