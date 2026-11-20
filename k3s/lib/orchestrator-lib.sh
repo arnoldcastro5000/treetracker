@@ -281,7 +281,7 @@ _disk_warned=0
 disk_preflight() {
   [ "$ENV" = local ] && [ "$_disk_warned" = 0 ] || return 0
   local pct
-  pct=$(df -P /var/lib/docker 2>/dev/null | awk 'NR==2{gsub("%","",$5);print $5}')
+  pct=$(df -P /var/lib/docker 2>/dev/null | awk 'NR==2{gsub("%","",$5);print $5}') || true
   [ -n "$pct" ] || pct=$(df -P / 2>/dev/null | awk 'NR==2{gsub("%","",$5);print $5}')
   if [ -n "$pct" ] && [ "$pct" -ge "$DISK_WARN_PCT" ]; then
     echo "${c_ylw}⚠ Docker disk ${pct}% full (>= ${DISK_WARN_PCT}%): a cold rebuild may trip kubelet DiskPressure and GC the local-only :local images. Proceeding (warn-only).${c_off}" >&2
