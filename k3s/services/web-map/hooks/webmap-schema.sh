@@ -61,5 +61,8 @@ CREATE TABLE IF NOT EXISTS webmap.raw_capture_feature (
   created_at          timestamptz NOT NULL,
   updated_at          timestamptz NOT NULL
 );
+
+-- Populate the low/mid-zoom tile source (baseline creates it WITH NO DATA, so tiles below z12 return 500).
+REFRESH MATERIALIZED VIEW public.active_tree_region;
 SQL
 log "webmap schema ready"

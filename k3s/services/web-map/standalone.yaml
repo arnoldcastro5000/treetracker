@@ -6,7 +6,7 @@
 # deliberate later opt-ins; low/mid zoom shows no dots locally by design (decision 07).
 name: web-map
 optIn: true
-dependsOn: [postgres, gateway]
+dependsOn: [postgres, gateway, capture]
 namespaces: [webmap]
 # Reads the capture stack's `treetracker` database (trees.estimated_geometric_location) plus the
 # webmap.* enrichment schema the pre hook provisions empty (decision 03). Declaring the db keeps
